@@ -1,5 +1,7 @@
 # Treasury Orchestration
 
+![CI](https://github.com/ai-crypto-onramp/treasury-orchestration/actions/workflows/ci.yml/badge.svg)
+
 Batches user crypto buys into aggregate parent orders, manages the T+0 vs T+2/3 float, and pre-funds hot wallets ahead of demand.
 
 ## Overview / Responsibilities
