@@ -2,12 +2,15 @@ package funding
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/projection"
+	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store/memstore"
 )
 
@@ -126,3 +129,316 @@ func TestManager_ListJobs_StatusFilter(t *testing.T) {
 		t.Fatalf("all=%d want 2", len(all))
 	}
 }
+
+// --- additional coverage ---
+
+func TestManager_CreateFundingRequest_WalletErrorRejects(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	wallet := clients.NewFakeWallet(clients.FundingMoveResult{Completed: true})
+	wallet.SetError(clients.ErrUnavailable)
+	mgr := New(Deps{
+		Cfg:     config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Funding: all.Funding,
+		Wallet:  wallet,
+		Idem:    idempotency.NewMem(),
+	})
+	fr, err := mgr.CreateFundingRequest(ctx, "h", "BTC", 5, "")
+	if err != nil {
+		t.Fatalf("expected nil err (request persisted as rejected), got %v", err)
+	}
+	got, _ := all.Funding.GetFunding(ctx, fr.ID)
+	if got.Status != store.FundingRejected {
+		t.Fatalf("status=%s want rejected", got.Status)
+	}
+}
+
+func TestManager_CreateFundingRequest_UpdateFundingStatusError(t *testing.T) {
+	ctx := context.Background()
+	mgr := New(Deps{
+		Cfg:     config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Funding: errFundingStore{}, // CreateFunding ok, UpdateFundingStatus errors
+		Wallet:  clients.NewFakeWallet(clients.FundingMoveResult{Completed: true}),
+		Idem:    idempotency.NewMem(),
+	})
+	_, err := mgr.CreateFundingRequest(ctx, "h", "BTC", 5, "")
+	if !errors.Is(err, errFundingErr) {
+		t.Fatalf("err=%v want errFundingErr", err)
+	}
+}
+
+func TestManager_CreateFundingRequest_OnFundingHook(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	called := make(chan int64, 4)
+	mgr := New(Deps{
+		Cfg:     config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Funding: all.Funding,
+		Wallet:  clients.NewFakeWallet(clients.FundingMoveResult{Completed: true}),
+		Idem:    idempotency.NewMem(),
+		OnFunding: func(_ context.Context, fr *store.FundingRequest) { called <- fr.ID },
+	})
+	if _, err := mgr.CreateFundingRequest(ctx, "h", "BTC", 5, ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-called:
+		if id <= 0 {
+			t.Fatalf("expected positive funding id, got %d", id)
+		}
+	default:
+		t.Fatal("expected OnFunding to fire")
+	}
+}
+
+func TestManager_CreateFundingRequest_IdemErrorLogs(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	mgr := New(Deps{
+		Cfg:     config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Funding: all.Funding,
+		Wallet:  clients.NewFakeWallet(clients.FundingMoveResult{Completed: true}),
+		Idem:    errIdemStore{},
+	})
+	// Should still complete (idem error is logged, not fatal).
+	fr, err := mgr.CreateFundingRequest(ctx, "h", "BTC", 5, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fr.Status != store.FundingCompleted {
+		t.Fatalf("status=%s want completed", fr.Status)
+	}
+}
+
+func TestManager_CreateFundingRequest_NilWalletSkipsDispatch(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	mgr := New(Deps{
+		Cfg:     config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Funding: all.Funding,
+		Wallet:  nil, // no wallet configured
+		Idem:    idempotency.NewMem(),
+	})
+	fr, err := mgr.CreateFundingRequest(ctx, "h", "BTC", 5, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fr.Status != store.FundingCompleted {
+		t.Fatalf("status=%s want completed", fr.Status)
+	}
+}
+
+func TestManager_Rebalance_RejectsInvalidAmount(t *testing.T) {
+	ctx := context.Background()
+	mgr, _, _, _ := newMgr(t)
+	if _, err := mgr.Rebalance(ctx, "a", "b", "BTC", 0, ""); err != ErrInvalidAmount {
+		t.Fatalf("err=%v want ErrInvalidAmount", err)
+	}
+	if _, err := mgr.Rebalance(ctx, "a", "b", "BTC", -1, ""); err != ErrInvalidAmount {
+		t.Fatalf("err=%v want ErrInvalidAmount", err)
+	}
+}
+
+func TestManager_Rebalance_WalletErrorReturnsErr(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	wallet := clients.NewFakeWallet(clients.FundingMoveResult{Completed: true})
+	wallet.SetError(clients.ErrUnavailable)
+	mgr := New(Deps{
+		Cfg:      config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Rebalance: all.Rebalance,
+		Wallet:   wallet,
+		Idem:     idempotency.NewMem(),
+	})
+	job, err := mgr.Rebalance(ctx, "a", "b", "BTC", 5, "drift")
+	if !errors.Is(err, clients.ErrUnavailable) {
+		t.Fatalf("err=%v want ErrUnavailable", err)
+	}
+	// Job is persisted as rejected.
+	got, _ := all.Rebalance.ListJobs(ctx, string(store.RebalanceRejected))
+	if len(got) != 1 || got[0].ID != job.ID {
+		t.Fatalf("expected 1 rejected job, got %+v", got)
+	}
+}
+
+func TestManager_Rebalance_OnRebalanceHook(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	called := make(chan int64, 4)
+	mgr := New(Deps{
+		Cfg:       config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Rebalance: all.Rebalance,
+		Wallet:    clients.NewFakeWallet(clients.FundingMoveResult{Completed: true}),
+		Idem:      idempotency.NewMem(),
+		OnRebalance: func(_ context.Context, job *store.RebalancingJob) { called <- job.ID },
+	})
+	if _, err := mgr.Rebalance(ctx, "a", "b", "BTC", 5, "drift"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-called:
+		if id <= 0 {
+			t.Fatalf("expected positive job id, got %d", id)
+		}
+	default:
+		t.Fatal("expected OnRebalance to fire")
+	}
+}
+
+func TestManager_Rebalance_NilWalletSkipsDispatch(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	mgr := New(Deps{
+		Cfg:      config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Rebalance: all.Rebalance,
+		Wallet:   nil,
+		Idem:     idempotency.NewMem(),
+	})
+	job, err := mgr.Rebalance(ctx, "a", "b", "BTC", 5, "drift")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != store.RebalanceCompleted {
+		t.Fatalf("status=%s want completed", job.Status)
+	}
+}
+
+func TestManager_Rebalance_UpdateJobStatusError(t *testing.T) {
+	ctx := context.Background()
+	mgr := New(Deps{
+		Cfg:      config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Rebalance: errRebalStore{}, // CreateJob ok, UpdateJobStatus errors
+		Wallet:   clients.NewFakeWallet(clients.FundingMoveResult{Completed: true}),
+		Idem:     idempotency.NewMem(),
+	})
+	_, err := mgr.Rebalance(ctx, "a", "b", "BTC", 5, "drift")
+	if !errors.Is(err, errRebalErr) {
+		t.Fatalf("err=%v want errRebalErr", err)
+	}
+}
+
+func TestManager_Rebalance_CreateJobError(t *testing.T) {
+	ctx := context.Background()
+	mgr := New(Deps{
+		Cfg:      config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Rebalance: errCreateJobStore{},
+		Wallet:   clients.NewFakeWallet(clients.FundingMoveResult{Completed: true}),
+		Idem:     idempotency.NewMem(),
+	})
+	if _, err := mgr.Rebalance(ctx, "a", "b", "BTC", 5, "drift"); !errors.Is(err, errRebalErr) {
+		t.Fatalf("err=%v want errRebalErr", err)
+	}
+}
+
+func TestManager_CreateFundingRequest_CreateFundingError(t *testing.T) {
+	ctx := context.Background()
+	mgr := New(Deps{
+		Cfg:     config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Funding: errCreateFundingStore{},
+		Wallet:  clients.NewFakeWallet(clients.FundingMoveResult{Completed: true}),
+		Idem:    idempotency.NewMem(),
+	})
+	if _, err := mgr.CreateFundingRequest(ctx, "h", "BTC", 5, ""); !errors.Is(err, errFundingErr) {
+		t.Fatalf("err=%v want errFundingErr", err)
+	}
+}
+
+func TestManager_checkAndRebalance_NoTargetReturns(t *testing.T) {
+	ctx := context.Background()
+	f := newMgrWithCfg(t, config.Config{}) // no HotWalletTargets
+	// No target configured -> early return, no funding created.
+	f.mgr.checkAndRebalance(ctx, "BTC", "h")
+	frs, _ := f.mgr.ListFunding(ctx, "")
+	if len(frs) != 0 {
+		t.Fatalf("expected 0 funding, got %d", len(frs))
+	}
+}
+
+func TestManager_checkAndRebalance_NilProjection(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	mgr := New(Deps{
+		Cfg:        config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
+		Funding:    all.Funding,
+		Rebalance:  all.Rebalance,
+		Wallet:     clients.NewFakeWallet(clients.FundingMoveResult{Completed: true}),
+		Idem:       idempotency.NewMem(),
+		Projection: nil, // no projection -> demand 0 -> no shortfall
+	})
+	mgr.checkAndRebalance(ctx, "BTC", "h")
+	frs, _ := mgr.ListFunding(ctx, "")
+	if len(frs) != 0 {
+		t.Fatalf("expected 0 funding (no projection), got %d", len(frs))
+	}
+}
+
+func TestManager_RunRebalanceLoop_CancelImmediately(t *testing.T) {
+	f := newMgrWithCfg(t, config.Config{HotWalletTargets: map[string]float64{"BTC": 10}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := f.mgr.RunRebalanceLoop(ctx, 0, "BTC", "h")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", err)
+	}
+}
+
+// --- fakes ---
+
+var errFundingErr = errors.New("funding store boom")
+var errRebalErr = errors.New("rebal store boom")
+
+type errFundingStore struct{}
+
+func (errFundingStore) CreateFunding(_ context.Context, f *store.FundingRequest) (*store.FundingRequest, error) {
+	// Return a cloned row with an ID so the manager proceeds, then fail on
+	// UpdateFundingStatus.
+	c := *f
+	c.ID = 1
+	return &c, nil
+}
+func (errFundingStore) GetFunding(context.Context, int64) (*store.FundingRequest, error) {
+	return nil, errFundingErr
+}
+func (errFundingStore) UpdateFundingStatus(context.Context, int64, store.FundingStatus) error {
+	return errFundingErr
+}
+func (errFundingStore) ListFunding(context.Context, string) ([]*store.FundingRequest, error) {
+	return nil, errFundingErr
+}
+
+// errCreateFundingStore fails on CreateFunding.
+type errCreateFundingStore struct{ errFundingStore }
+
+func (errCreateFundingStore) CreateFunding(context.Context, *store.FundingRequest) (*store.FundingRequest, error) {
+	return nil, errFundingErr
+}
+
+type errRebalStore struct{}
+
+func (errRebalStore) CreateJob(_ context.Context, j *store.RebalancingJob) (*store.RebalancingJob, error) {
+	c := *j
+	c.ID = 1
+	return &c, nil
+}
+func (errRebalStore) ListJobs(context.Context, string) ([]*store.RebalancingJob, error) { return nil, nil }
+func (errRebalStore) UpdateJobStatus(context.Context, int64, store.RebalanceStatus) error {
+	return errRebalErr
+}
+
+// errCreateJobStore fails on CreateJob.
+type errCreateJobStore struct{}
+
+func (errCreateJobStore) CreateJob(context.Context, *store.RebalancingJob) (*store.RebalancingJob, error) {
+	return nil, errRebalErr
+}
+func (errCreateJobStore) ListJobs(context.Context, string) ([]*store.RebalancingJob, error) { return nil, nil }
+func (errCreateJobStore) UpdateJobStatus(context.Context, int64, store.RebalanceStatus) error {
+	return nil
+}
+
+type errIdemStore struct{}
+
+func (errIdemStore) CheckAndMark(context.Context, string, time.Duration) (bool, error) {
+	return false, errFundingErr
+}
+func (errIdemStore) Delete(context.Context, string) error { return nil }

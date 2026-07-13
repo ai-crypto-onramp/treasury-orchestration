@@ -2,6 +2,7 @@ package float
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -114,4 +115,159 @@ func TestTracker_SweepMaturedSettles(t *testing.T) {
 	if len(matured) != 0 {
 		t.Fatalf("expected 0 matured after sweep, got %d", len(matured))
 	}
+}
+
+// --- additional coverage ---
+
+func TestTracker_Get(t *testing.T) {
+	ctx := context.Background()
+	tr, floats := newTracker(t, config.Config{SettlementDays: map[string]int{"USD": 2}})
+	_, _ = floats.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 750, LongCryptoAmount: 0.01, LongCryptoAsset: "BTC"})
+	pos, err := tr.Get(ctx, "USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pos.ShortFiatAmount != 750 {
+		t.Fatalf("short=%f want 750", pos.ShortFiatAmount)
+	}
+	// Get on an unknown currency returns a zero position (no error).
+	pos2, err := tr.Get(ctx, "EUR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pos2.ShortFiatAmount != 0 {
+		t.Fatalf("short=%f want 0", pos2.ShortFiatAmount)
+	}
+}
+
+func TestTracker_OnAggregateFillAddFloatError(t *testing.T) {
+	ctx := context.Background()
+	tr := New(Deps{Cfg: config.Config{SettlementDays: map[string]int{"USD": 2}}, Floats: errFloatStore{}})
+	err := tr.OnAggregateFill(ctx, &store.Batch{ID: 1}, &store.AggregateOrder{NotionalUSD: 100, TotalFilled: 1}, "USD", "BTC")
+	if !errors.Is(err, errFloat) {
+		t.Fatalf("err=%v want errFloat", err)
+	}
+}
+
+func TestTracker_OnAggregateFillOnAdjustHook(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	adjusted := make(chan struct{}, 4)
+	tr := New(Deps{
+		Cfg:       config.Config{SettlementDays: map[string]int{"USD": 2}},
+		Floats:    all.Float,
+		OnAdjust:  func(context.Context, string, float64, int64) { adjusted <- struct{}{} },
+	})
+	if err := tr.OnAggregateFill(ctx, &store.Batch{ID: 1}, &store.AggregateOrder{NotionalUSD: 100, TotalFilled: 1}, "USD", "BTC"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-adjusted:
+	default:
+		t.Fatal("expected OnAdjust to fire")
+	}
+}
+
+func TestTracker_SweepMaturedListError(t *testing.T) {
+	tr := New(Deps{Cfg: config.Config{}, Floats: errFloatStore{}})
+	n, err := tr.SweepMatured(context.Background())
+	if !errors.Is(err, errFloat) {
+		t.Fatalf("err=%v want errFloat", err)
+	}
+	if n != 0 {
+		t.Fatalf("n=%d want 0", n)
+	}
+}
+
+func TestTracker_SweepMaturedSettleErrorContinues(t *testing.T) {
+	ctx := context.Background()
+	// settleErrFloatStore returns one matured float, then errors on SettleFloat.
+	tr := New(Deps{Cfg: config.Config{}, Floats: &settleErrFloatStore{}})
+	n, err := tr.SweepMatured(ctx)
+	if err != nil {
+		t.Fatalf("err=%v want nil (logged and continues)", err)
+	}
+	if n != 0 {
+		t.Fatalf("n=%d want 0 (settle failed)", n)
+	}
+}
+
+func TestTracker_RunSweeperLoopCancelImmediately(t *testing.T) {
+	tr, _ := newTracker(t, config.Config{SettlementDays: map[string]int{"USD": 2}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := tr.RunSweeperLoop(ctx, 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", err)
+	}
+}
+
+func TestTracker_RunSweeperLoopDispatches(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	tr := New(Deps{Cfg: config.Config{}, Floats: all.Float})
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 100, LongCryptoAmount: 0.01, LongCryptoAsset: "BTC", SettlementDueAt: past})
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- tr.RunSweeperLoop(runCtx, 50*time.Millisecond) }()
+	// Wait for a sweep to settle the matured float.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		m, _ := all.Float.ListMaturedFloat(ctx, time.Now())
+		if len(m) == 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunSweeperLoop did not return after cancel")
+	}
+	m, _ := all.Float.ListMaturedFloat(ctx, time.Now())
+	if len(m) != 0 {
+		t.Fatalf("expected matured swept, got %d", len(m))
+	}
+}
+
+// --- fakes ---
+
+var errFloat = errors.New("float boom")
+
+type errFloatStore struct{}
+
+func (errFloatStore) AddFloat(context.Context, *store.FloatPosition) (*store.FloatPosition, error) {
+	return nil, errFloat
+}
+func (errFloatStore) GetFloat(context.Context, string) (*store.FloatPosition, error) {
+	return nil, errFloat
+}
+func (errFloatStore) ListMaturedFloat(context.Context, time.Time) ([]*store.FloatPosition, error) {
+	return nil, errFloat
+}
+func (errFloatStore) SettleFloat(context.Context, int64) (*store.FloatPosition, error) {
+	return nil, errFloat
+}
+
+// settleErrFloatStore returns one matured float on ListMaturedFloat but
+// errors on SettleFloat.
+type settleErrFloatStore struct {
+	rows []*store.FloatPosition
+}
+
+func (s *settleErrFloatStore) AddFloat(_ context.Context, p *store.FloatPosition) (*store.FloatPosition, error) {
+	s.rows = append(s.rows, p)
+	return p, nil
+}
+func (s *settleErrFloatStore) GetFloat(context.Context, string) (*store.FloatPosition, error) {
+	return &store.FloatPosition{}, nil
+}
+func (s *settleErrFloatStore) ListMaturedFloat(_ context.Context, _ time.Time) ([]*store.FloatPosition, error) {
+	return []*store.FloatPosition{{ID: 1, FiatCurrency: "USD", ShortFiatAmount: 100, SettlementDueAt: time.Now().UTC().Add(-time.Hour)}}, nil
+}
+func (s *settleErrFloatStore) SettleFloat(context.Context, int64) (*store.FloatPosition, error) {
+	return nil, errFloat
 }

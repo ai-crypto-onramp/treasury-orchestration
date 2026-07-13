@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -289,4 +290,336 @@ func itoa(n int64) string {
 		buf[pos] = '-'
 	}
 	return string(buf[pos:])
+}
+
+// --- additional coverage ---
+
+func TestBatches_MethodNotAllowed(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/batches", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("code=%d want 405", resp.StatusCode)
+	}
+}
+
+func TestBatches_ListBatchesError(t *testing.T) {
+	d, _, _ := newDeps(t)
+	d.Batches = errBatchStore{err: errAPI}
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/batches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_MissingID(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	// "/v1/batches/" with empty id.
+	resp, err := http.Get(srv.URL + "/v1/batches/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("code=%d want 400", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_InvalidID(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/batches/notanumber")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("code=%d want 400", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_CloseMethodNotAllowed(t *testing.T) {
+	d, all, _ := newDeps(t)
+	b, _ := all.Batch.OpenBatch(context.Background(), "BTC/USD")
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/batches/"+itoa(b.ID)+"/close", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("code=%d want 405", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_CloseSchedulerNil(t *testing.T) {
+	d, all, _ := newDeps(t)
+	b, _ := all.Batch.OpenBatch(context.Background(), "BTC/USD")
+	d.Scheduler = nil
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/v1/batches/"+itoa(b.ID)+"/close", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d want 503", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_CloseAlreadyClosedConflict(t *testing.T) {
+	d, all, _ := newDeps(t)
+	b, _ := all.Batch.OpenBatch(context.Background(), "BTC/USD")
+	// Close it once first.
+	if _, err := d.Scheduler.CloseBatch(context.Background(), b.ID); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/v1/batches/"+itoa(b.ID)+"/close", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("code=%d want 409", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_CloseNotFound(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/v1/batches/9999/close", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("code=%d want 404", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_GetInternalError(t *testing.T) {
+	d, _, _ := newDeps(t)
+	d.Batches = errBatchStore{err: errAPI}
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/batches/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_GetWithoutOrdersOrMembers(t *testing.T) {
+	ctx := context.Background()
+	d, all, _ := newDeps(t)
+	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
+	d.Orders = nil
+	d.Members = nil
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/batches/" + itoa(b.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+}
+
+func TestFloat_MethodNotAllowed(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/float/USD", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("code=%d want 405", resp.StatusCode)
+	}
+}
+
+func TestFloat_MissingCurrency(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	// "/v1/float/" with empty currency.
+	resp, err := http.Get(srv.URL + "/v1/float/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("code=%d want 400", resp.StatusCode)
+	}
+}
+
+func TestFunding_MalformedJSON(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/v1/funding-requests", "application/json", strings.NewReader("{bad"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("code=%d want 400", resp.StatusCode)
+	}
+}
+
+func TestFunding_PolicyViolation(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	body := `{"wallet_id":"h","asset":"BTC","amount":` + itoa(int64(11_000_000)) + `}`
+	resp, err := http.Post(srv.URL+"/v1/funding-requests", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("code=%d want 403", resp.StatusCode)
+	}
+}
+
+func TestFunding_ListError(t *testing.T) {
+	d, _, _ := newDeps(t)
+	// Replace Funding with one backed by an erroring store.
+	d.Funding = funding.New(funding.Deps{
+		Cfg:     config.Config{},
+		Funding: errFundingStore{err: errAPI},
+	})
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/funding-requests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500", resp.StatusCode)
+	}
+}
+
+func TestRebalancing_MethodNotAllowed(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/rebalancing-jobs", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("code=%d want 405", resp.StatusCode)
+	}
+}
+
+func TestRebalancing_ListError(t *testing.T) {
+	d, _, _ := newDeps(t)
+	d.Funding = funding.New(funding.Deps{
+		Cfg:       config.Config{},
+		Rebalance: errRebalStore{err: errAPI},
+	})
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/rebalancing-jobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500", resp.StatusCode)
+	}
+}
+
+func TestNewRouter_NilDepsOmitsRoutes(t *testing.T) {
+	// A Deps with no Batches/Float/Funding should still serve healthz.
+	srv := httptest.NewServer(NewRouter(&Deps{}))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+}
+
+// --- fakes ---
+
+var errAPI = errors.New("api store boom")
+
+type errBatchStore struct{ err error }
+
+func (e errBatchStore) OpenBatch(context.Context, string) (*store.Batch, error) {
+	return nil, e.err
+}
+func (e errBatchStore) GetBatch(context.Context, int64) (*store.Batch, error) { return nil, e.err }
+func (e errBatchStore) ListBatches(context.Context, time.Time, time.Time) ([]*store.Batch, error) {
+	return nil, e.err
+}
+func (e errBatchStore) ListOpenBatches(context.Context) ([]*store.Batch, error) {
+	return nil, e.err
+}
+func (e errBatchStore) UpdateBatchStatus(context.Context, int64, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
+	return nil, false, e.err
+}
+func (e errBatchStore) SetBatchNotional(context.Context, int64, float64) error { return e.err }
+
+type errFundingStore struct{ err error }
+
+func (e errFundingStore) CreateFunding(context.Context, *store.FundingRequest) (*store.FundingRequest, error) {
+	return nil, e.err
+}
+func (e errFundingStore) GetFunding(context.Context, int64) (*store.FundingRequest, error) {
+	return nil, e.err
+}
+func (e errFundingStore) UpdateFundingStatus(context.Context, int64, store.FundingStatus) error {
+	return e.err
+}
+func (e errFundingStore) ListFunding(context.Context, string) ([]*store.FundingRequest, error) {
+	return nil, e.err
+}
+
+type errRebalStore struct{ err error }
+
+func (e errRebalStore) CreateJob(context.Context, *store.RebalancingJob) (*store.RebalancingJob, error) {
+	return nil, e.err
+}
+func (e errRebalStore) ListJobs(context.Context, string) ([]*store.RebalancingJob, error) {
+	return nil, e.err
+}
+func (e errRebalStore) UpdateJobStatus(context.Context, int64, store.RebalanceStatus) error {
+	return e.err
 }

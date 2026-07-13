@@ -2,11 +2,13 @@ package consumer
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/eventbus"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
+	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store/memstore"
 )
 
@@ -112,3 +114,240 @@ func TestConsumer_OpenBatchReusedPerAssetPair(t *testing.T) {
 		t.Fatalf("expected 2 open batches (BTC/USD, ETH/USD), got %d", len(open))
 	}
 }
+
+// --- additional coverage ---
+
+func TestConsumer_Stop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, _, _, _ := newDeps(t)
+	done := make(chan struct{})
+	go func() { _ = c.Run(ctx); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	c.Stop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not unblock Run")
+	}
+}
+
+func TestConsumer_StopWhenNotRunning(t *testing.T) {
+	c, _, _, _ := newDeps(t)
+	// Stop with nil stop func should be a no-op, not panic.
+	c.Stop()
+}
+
+func TestConsumer_HandleNotionalFallback(t *testing.T) {
+	ctx := context.Background()
+	c, all, _, _ := newDeps(t)
+	// NotionalUSD == 0 -> use Amount.
+	ev := eventbus.TxCompletedEvent{TxID: "nf1", Asset: "BTC", FiatCurrency: "USD", Amount: 2, NotionalUSD: 0}
+	c.handle(ctx, ev)
+	exists, _ := all.Membership.ExistsByTxID(ctx, "nf1")
+	if !exists {
+		t.Fatal("expected membership persisted")
+	}
+	open, _ := all.Batch.ListOpenBatches(ctx)
+	if len(open) != 1 || open[0].NotionalUSD != 2 {
+		t.Fatalf("notional=%f want 2 (from Amount)", open[0].NotionalUSD)
+	}
+}
+
+func TestConsumer_HandleOnBatchOpenHook(t *testing.T) {
+	ctx := context.Background()
+	c, _, _, _ := newDeps(t)
+	opened := make(chan int64, 4)
+	c.Deps.OnBatchOpen = func(_ context.Context, b *store.Batch) { opened <- b.ID }
+	// First event opens a new batch.
+	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "h1", Asset: "BTC", FiatCurrency: "USD"})
+	// Second event for the same pair reuses the batch -> no new open hook.
+	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "h2", Asset: "BTC", FiatCurrency: "USD"})
+	select {
+	case id := <-opened:
+		if id <= 0 {
+			t.Fatalf("expected positive batch id, got %d", id)
+		}
+	default:
+		t.Fatal("expected OnBatchOpen to fire for the first event")
+	}
+	select {
+	case <-opened:
+		t.Fatal("OnBatchOpen should not fire for the reused batch")
+	default:
+	}
+}
+
+func TestConsumer_HandleEmptyAssetDeadLetters(t *testing.T) {
+	ctx := context.Background()
+	c, _, _, _ := newDeps(t)
+	dl := make(chan DeadLetter, 4)
+	c.Deps.DeadLetters = dl
+	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "x", Asset: ""})
+	select {
+	case <-dl:
+	default:
+		t.Fatal("expected a dead-letter for empty asset")
+	}
+}
+
+func TestConsumer_HandleIdemErrorSkips(t *testing.T) {
+	ctx := context.Background()
+	c, all, _, _ := newDeps(t)
+	c.Deps.Idem = errIdemStore{}
+	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "ie", Asset: "BTC", FiatCurrency: "USD"})
+	// Nothing persisted.
+	exists, _ := all.Membership.ExistsByTxID(ctx, "ie")
+	if exists {
+		t.Fatal("expected no membership on idem error")
+	}
+}
+
+func TestConsumer_HandleExistsByTxIDErrorSkips(t *testing.T) {
+	ctx := context.Background()
+	c, _, bus, _ := newDeps(t)
+	c.Deps.Memberships = errMembershipStore{}
+	_ = bus
+	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "ee", Asset: "BTC", FiatCurrency: "USD"})
+	// Nothing persisted (no panic).
+}
+
+func TestConsumer_HandleOpenBatchErrorSkips(t *testing.T) {
+	ctx := context.Background()
+	c, all, _, _ := newDeps(t)
+	c.Deps.Batches = errBatchStore{}
+	_ = all
+	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "oe", Asset: "BTC", FiatCurrency: "USD"})
+}
+
+func TestConsumer_HandleAddMembershipErrorSkips(t *testing.T) {
+	ctx := context.Background()
+	c, _, _, _ := newDeps(t)
+	c.Deps.Memberships = &addErrMembershipStore{}
+	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "ae", Asset: "BTC", FiatCurrency: "USD"})
+}
+
+func TestConsumer_HandleDurableDupSkips(t *testing.T) {
+	ctx := context.Background()
+	c, all, _, _ := newDeps(t)
+	// Pre-populate the membership store with the tx so the durable dedup
+	// path triggers (the idem store still claims the key, but ExistsByTxID
+	// returns true).
+	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: 1, TxID: "dd", Asset: "BTC", FiatCurrency: "USD"})
+	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "dd", Asset: "BTC", FiatCurrency: "USD"})
+	ms, _ := all.Membership.ListMemberships(ctx, 1)
+	if len(ms) != 1 {
+		t.Fatalf("expected 1 membership (durable dup skipped), got %d", len(ms))
+	}
+}
+
+func TestConsumer_DeadLetterChannelFullDrops(t *testing.T) {
+	ctx := context.Background()
+	c, _, _, _ := newDeps(t)
+	// A zero-capacity channel that's never read: the non-blocking send
+	// falls through to the default branch (logged drop).
+	dl := make(chan DeadLetter)
+	c.Deps.DeadLetters = dl
+	// Should not block.
+	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "", Asset: ""})
+	select {
+	case <-dl:
+		t.Fatal("expected no dead-letter (channel full)")
+	default:
+	}
+}
+
+func TestConsumer_RunSubscriberError(t *testing.T) {
+	c, _, _, _ := newDeps(t)
+	c.Deps.Subscriber = errSubscriber{}
+	if err := c.Run(context.Background()); !errors.Is(err, errSub) {
+		t.Fatalf("err=%v want errSub", err)
+	}
+}
+
+func TestConsumer_RunChannelClosedReturnsNil(t *testing.T) {
+	c, _, _, _ := newDeps(t)
+	ch := make(chan eventbus.TxCompletedEvent)
+	sub := &closeChanSubscriber{ch: ch}
+	c.Deps.Subscriber = sub
+	done := make(chan error, 1)
+	go func() { done <- c.Run(context.Background()) }()
+	// Close the channel to make Run return nil.
+	close(ch)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("err=%v want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after channel close")
+	}
+}
+
+// --- fakes ---
+
+var errSub = errors.New("subscribe boom")
+
+type errSubscriber struct{}
+
+func (errSubscriber) Subscribe(context.Context, string) (<-chan eventbus.TxCompletedEvent, func(), error) {
+	return nil, func() {}, errSub
+}
+func (errSubscriber) Push(context.Context, string, eventbus.TxCompletedEvent) error { return nil }
+
+type closeChanSubscriber struct {
+	ch   chan eventbus.TxCompletedEvent
+	stop func()
+}
+
+func (s *closeChanSubscriber) Subscribe(context.Context, string) (<-chan eventbus.TxCompletedEvent, func(), error) {
+	return s.ch, func() {}, nil
+}
+func (s *closeChanSubscriber) Push(context.Context, string, eventbus.TxCompletedEvent) error { return nil }
+
+type errIdemStore struct{}
+
+func (errIdemStore) CheckAndMark(context.Context, string, time.Duration) (bool, error) { return false, errSub }
+func (errIdemStore) Delete(context.Context, string) error                              { return nil }
+
+var errStore = errors.New("store boom")
+
+type errBatchStore struct{}
+
+func (errBatchStore) OpenBatch(context.Context, string) (*store.Batch, error) { return nil, errStore }
+func (errBatchStore) GetBatch(context.Context, int64) (*store.Batch, error)   { return nil, errStore }
+func (errBatchStore) ListBatches(context.Context, time.Time, time.Time) ([]*store.Batch, error) {
+	return nil, errStore
+}
+func (errBatchStore) ListOpenBatches(context.Context) ([]*store.Batch, error) { return nil, errStore }
+func (errBatchStore) UpdateBatchStatus(context.Context, int64, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
+	return nil, false, errStore
+}
+func (errBatchStore) SetBatchNotional(context.Context, int64, float64) error { return errStore }
+
+type errMembershipStore struct{}
+
+func (errMembershipStore) AddMembership(context.Context, *store.Membership) (bool, error) {
+	return false, errStore
+}
+func (errMembershipStore) ListMemberships(context.Context, int64) ([]*store.Membership, error) {
+	return nil, errStore
+}
+func (errMembershipStore) SumNotional(context.Context, int64) (float64, error) { return 0, errStore }
+func (errMembershipStore) ExistsByTxID(context.Context, string) (bool, error)  { return false, errStore }
+
+// addErrMembershipStore succeeds on ExistsByTxID / ListMemberships but
+// errors on AddMembership.
+type addErrMembershipStore struct {
+	errMembershipStore
+	rows []*store.Membership
+}
+
+func (a *addErrMembershipStore) ListMemberships(_ context.Context, _ int64) ([]*store.Membership, error) {
+	return a.rows, nil
+}
+func (a *addErrMembershipStore) ExistsByTxID(context.Context, string) (bool, error) { return false, nil }
+func (a *addErrMembershipStore) AddMembership(context.Context, *store.Membership) (bool, error) {
+	return false, errStore
+}
+func (a *addErrMembershipStore) SumNotional(context.Context, int64) (float64, error) { return 0, nil }

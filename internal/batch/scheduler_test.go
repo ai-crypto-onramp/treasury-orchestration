@@ -2,6 +2,7 @@ package batch
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -120,3 +121,176 @@ func TestScheduler_CadenceLockPreventsDoubleClose(t *testing.T) {
 		t.Fatalf("expected open (lock held), got %s", got.Status)
 	}
 }
+
+// --- fakes for error-path tests ---
+
+type errBatchStore struct{ err error }
+
+func (e errBatchStore) OpenBatch(context.Context, string) (*store.Batch, error) {
+	return nil, e.err
+}
+func (e errBatchStore) GetBatch(context.Context, int64) (*store.Batch, error) {
+	return nil, e.err
+}
+func (e errBatchStore) ListBatches(context.Context, time.Time, time.Time) ([]*store.Batch, error) {
+	return nil, e.err
+}
+func (e errBatchStore) ListOpenBatches(context.Context) ([]*store.Batch, error) {
+	return nil, e.err
+}
+func (e errBatchStore) UpdateBatchStatus(context.Context, int64, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
+	return nil, false, e.err
+}
+func (e errBatchStore) SetBatchNotional(context.Context, int64, float64) error { return e.err }
+
+type noOpMembership struct{}
+
+func (noOpMembership) AddMembership(context.Context, *store.Membership) (bool, error) { return true, nil }
+func (noOpMembership) ListMemberships(context.Context, int64) ([]*store.Membership, error) {
+	return nil, nil
+}
+func (noOpMembership) SumNotional(context.Context, int64) (float64, error) { return 0, nil }
+func (noOpMembership) ExistsByTxID(context.Context, string) (bool, error)   { return false, nil }
+
+func TestScheduler_TickListErrorReturns(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Config{BatchIntervalSeconds: 30, BatchSizeThresholdUSD: 100}
+	s := New(Deps{
+		Cfg:         cfg,
+		Batches:     errBatchStore{err: errStore},
+		Memberships: noOpMembership{},
+		Lock:        idempotency.NewCadenceLock(idempotency.NewMem(), time.Minute),
+	})
+	// Should not panic; just logs and returns.
+	s.tick(ctx)
+}
+
+func TestScheduler_TickCloseBatchGetError(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Config{BatchIntervalSeconds: 30, BatchSizeThresholdUSD: 100}
+	s := New(Deps{
+		Cfg:         cfg,
+		Batches:     errBatchStore{err: errStore},
+		Memberships: noOpMembership{},
+		Lock:        idempotency.NewCadenceLock(idempotency.NewMem(), time.Minute),
+	})
+	if _, err := s.CloseBatch(ctx, 1); err != errStore {
+		t.Fatalf("expected errStore, got %v", err)
+	}
+}
+
+var errStore = errors.New("store boom")
+
+// TestScheduler_RunAndStop covers the Run loop and Stop. Run blocks; we
+// start it and Stop it shortly after to exercise the ctx.Done() return
+// path and the stop mutex.
+func TestScheduler_RunAndStop(t *testing.T) {
+	cfg := config.Config{BatchIntervalSeconds: 30, BatchSizeThresholdUSD: 100}
+	all := memstore.NewAll()
+	s := New(Deps{
+		Cfg:         cfg,
+		Batches:     all.Batch,
+		Memberships: all.Membership,
+		Lock:        idempotency.NewCadenceLock(idempotency.NewMem(), time.Minute),
+	})
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { done <- s.Run(ctx) }()
+	// Let the loop install stop and tick at least once.
+	time.Sleep(150 * time.Millisecond)
+	// Stop via the public Stop API (exercises the stop mutex / nil guard).
+	s.Stop()
+	// Calling Stop again is a no-op (stop already nil-guarded).
+	s.Stop()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil && err != context.Canceled {
+			t.Fatalf("run returned %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		// Run may still be ticking if Stop didn't propagate before cancel;
+		// cancel ensures it returns.
+		select {
+		case err := <-done:
+			if err != nil && err != context.Canceled {
+				t.Fatalf("run returned %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("Run did not return")
+		}
+	}
+}
+
+// TestScheduler_ConcurrentManualCloses verifies that two concurrent manual
+// closes on the same open batch do not both succeed (one wins, the other
+// gets ErrNotOpen via the ok=false branch).
+func TestScheduler_ConcurrentManualCloses(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Config{BatchIntervalSeconds: 3600, BatchSizeThresholdUSD: 100000}
+	s, all, _ := newSchedulerDeps(t, cfg)
+	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
+
+	wins := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := s.CloseBatch(ctx, b.ID)
+			wins <- err
+		}()
+	}
+	var nils, notOpens int
+	for i := 0; i < 2; i++ {
+		e := <-wins
+		switch e {
+		case nil:
+			nils++
+		case ErrNotOpen:
+			notOpens++
+		default:
+			t.Fatalf("unexpected err: %v", e)
+		}
+	}
+	if nils != 1 || notOpens != 1 {
+		t.Fatalf("expected 1 win + 1 not-open, got nils=%d notOpens=%d", nils, notOpens)
+	}
+}
+
+// TestScheduler_CloseBatchUnknownID exercises the GetBatch error path
+// with a real store (ErrNotFound).
+func TestScheduler_CloseBatchUnknownID(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Config{BatchIntervalSeconds: 3600, BatchSizeThresholdUSD: 100000}
+	s, _, _ := newSchedulerDeps(t, cfg)
+	if _, err := s.CloseBatch(ctx, 999); err != store.ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestScheduler_TickLockAcquireError exercises the branch where Lock.Acquire
+// returns an error (store-backed idem that errors).
+func TestScheduler_TickLockAcquireError(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Config{BatchIntervalSeconds: 3600, BatchSizeThresholdUSD: 100}
+	all := memstore.NewAll()
+	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
+	// Make it size-eligible so tick tries to acquire the lock.
+	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t", NotionalUSD: 1000, Asset: "BTC", FiatCurrency: "USD"})
+	s := New(Deps{
+		Cfg:         cfg,
+		Batches:     all.Batch,
+		Memberships: all.Membership,
+		Lock:        idempotency.NewCadenceLock(errBatchStore{err: errStore}, time.Minute), // errBatchStore implements idempotency.Store
+	})
+	// Should log and continue without closing.
+	s.tick(ctx)
+	got, _ := all.Batch.GetBatch(ctx, b.ID)
+	if got.Status != store.BatchOpen {
+		t.Fatalf("expected batch still open after lock error, got %s", got.Status)
+	}
+}
+
+// errStore also implements idempotency.Store (CheckAndMark/Delete error).
+func (e errBatchStore) CheckAndMark(context.Context, string, time.Duration) (bool, error) {
+	return false, errStore
+}
+func (e errBatchStore) Delete(context.Context, string) error { return errStore }

@@ -2,9 +2,12 @@ package ledger
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
+	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store/memstore"
 )
 
@@ -92,3 +95,147 @@ func TestEmitter_Key(t *testing.T) {
 		t.Fatalf("key=%q want batch.batch.close:42", got)
 	}
 }
+
+// --- additional coverage ---
+
+func TestEmitter_DispatchAuditErrorKeepsPending(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	audit := clients.NewFakeAudit()
+	audit.SetError(clients.ErrUnavailable)
+	e := New(Deps{Outbox: all.Outbox, Ledger: clients.NewFakeLedger(), Audit: audit})
+	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: 1})
+	n, _ := e.Dispatch(ctx, 10)
+	if n != 0 {
+		t.Fatalf("dispatched=%d want 0 (audit failed)", n)
+	}
+	pending, _ := all.Outbox.ListPending(ctx, 10)
+	if len(pending) != 1 {
+		t.Fatalf("pending=%d want 1 (retry)", len(pending))
+	}
+}
+
+func TestEmitter_DispatchNilClientsSkipsPosting(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	// No Ledger, no Audit configured.
+	e := New(Deps{Outbox: all.Outbox})
+	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: 1})
+	n, err := e.Dispatch(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("dispatched=%d want 1 (mark emitted only)", n)
+	}
+	pending, _ := all.Outbox.ListPending(ctx, 10)
+	if len(pending) != 0 {
+		t.Fatalf("pending=%d want 0", len(pending))
+	}
+}
+
+func TestEmitter_DispatchListPendingError(t *testing.T) {
+	ctx := context.Background()
+	e := New(Deps{Outbox: errOutboxStore{}})
+	n, err := e.Dispatch(ctx, 10)
+	if err != errOutbox {
+		t.Fatalf("err=%v want errOutbox", err)
+	}
+	if n != 0 {
+		t.Fatalf("n=%d want 0", n)
+	}
+}
+
+func TestEmitter_DispatchMarkEmittedError(t *testing.T) {
+	ctx := context.Background()
+	e := New(Deps{
+		Outbox: &markErrOutbox{},
+		Ledger: clients.NewFakeLedger(),
+	})
+	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: 1})
+	n, _ := e.Dispatch(ctx, 10)
+	if n != 0 {
+		t.Fatalf("dispatched=%d want 0 (mark emitted failed)", n)
+	}
+}
+
+func TestEmitter_RunDispatcherLoopDefaultInterval(t *testing.T) {
+	// interval <= 0 should default to 5s. Start, cancel immediately, and
+	// verify Run returns ctx.Err() without panicking.
+	all := memstore.NewAll()
+	e := New(Deps{Outbox: all.Outbox, Ledger: clients.NewFakeLedger(), Audit: clients.NewFakeAudit()})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := e.RunDispatcherLoop(ctx, 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", err)
+	}
+}
+
+func TestEmitter_RunDispatcherLoopDispatches(t *testing.T) {
+	all := memstore.NewAll()
+	ledgerCli := clients.NewFakeLedger()
+	auditCli := clients.NewFakeAudit()
+	e := New(Deps{Outbox: all.Outbox, Ledger: ledgerCli, Audit: auditCli})
+	_ = e.Append(context.Background(), AggBatch, EvBatchClose, "k1", Payload{BatchID: 1})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- e.RunDispatcherLoop(ctx, 50*time.Millisecond) }()
+	// Wait for at least one tick to dispatch.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(ledgerCli.Calls()) >= 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunDispatcherLoop did not return after cancel")
+	}
+	if len(ledgerCli.Calls()) < 1 {
+		t.Fatalf("ledger calls=%d want >=1", len(ledgerCli.Calls()))
+	}
+}
+
+func TestEmitter_AppendOverwritesAggregateAndEventType(t *testing.T) {
+	ctx := context.Background()
+	all := memstore.NewAll()
+	e := New(Deps{Outbox: all.Outbox, Ledger: clients.NewFakeLedger(), Audit: clients.NewFakeAudit()})
+	// Pass a Payload with conflicting Aggregate/EventType; Append should
+	// overwrite them with the explicit args.
+	_ = e.Append(ctx, AggFunding, EvFunding, "k1", Payload{Aggregate: AggBatch, EventType: EvBatchOpen, BatchID: 1})
+	n, _ := e.Dispatch(ctx, 10)
+	if n != 1 {
+		t.Fatalf("dispatched=%d want 1", n)
+	}
+}
+
+// --- fakes ---
+
+var errOutbox = errors.New("outbox boom")
+
+type errOutboxStore struct{}
+
+func (errOutboxStore) Append(context.Context, *store.OutboxEntry) (bool, error) { return false, errOutbox }
+func (errOutboxStore) ListPending(context.Context, int) ([]*store.OutboxEntry, error) {
+	return nil, errOutbox
+}
+func (errOutboxStore) MarkEmitted(context.Context, int64) error { return errOutbox }
+
+// markErrOutbox succeeds for Append/ListPending but errors on MarkEmitted.
+type markErrOutbox struct {
+	rows []*store.OutboxEntry
+}
+
+func (m *markErrOutbox) Append(_ context.Context, e *store.OutboxEntry) (bool, error) {
+	m.rows = append(m.rows, e)
+	return true, nil
+}
+func (m *markErrOutbox) ListPending(_ context.Context, _ int) ([]*store.OutboxEntry, error) {
+	return m.rows, nil
+}
+func (m *markErrOutbox) MarkEmitted(context.Context, int64) error { return errOutbox }

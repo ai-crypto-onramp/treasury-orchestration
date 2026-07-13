@@ -45,6 +45,7 @@ type Server struct {
 	scheduler *batch.Scheduler
 	float     *float.Tracker
 	emitter   *ledger.Emitter
+	mu        sync.Mutex
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	db        *postgres.DB
@@ -276,7 +277,9 @@ func Build(cfg config.Config) (*Server, error) {
 // SIGINT/SIGTERM.
 func (s *Server) Run() error {
 	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
 	s.cancel = cancel
+	s.mu.Unlock()
 	s.startLoops(ctx)
 	log.Printf("treasury-orchestration listening on :%s", s.cfg.Port)
 	errCh := make(chan error, 1)
@@ -301,8 +304,12 @@ func (s *Server) startLoops(ctx context.Context) {
 
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown() error {
-	if s.cancel != nil {
-		s.cancel()
+	s.mu.Lock()
+	cancel := s.cancel
+	s.cancel = nil
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
