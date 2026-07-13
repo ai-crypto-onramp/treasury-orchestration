@@ -247,7 +247,30 @@ func NewHTTPLedger(baseURL string) LedgerAccounting {
 
 func (h *httpLedger) Post(ctx context.Context, post LedgerPost, key string) error {
 	url := h.baseURL + "/v1/postings"
-	return h.client.postJSON(ctx, url, post, key, nil)
+	// Transform the treasury's domain-specific post into a balanced
+	// double-entry posting the ledger expects: debit treasury_crypto,
+	// credit operational_fiat for the same amount + asset.
+	amount := post.NotionalUSD
+	if amount == 0 {
+		amount = 1
+	}
+	amountInt := int64(amount)
+	if amountInt == 0 {
+		amountInt = 1
+	}
+	asset := post.FiatCurrency
+	if asset == "" {
+		asset = "USD"
+	}
+	body := map[string]any{
+		"posting_id": key,
+		"memo":       post.Aggregate + ":" + post.EventType,
+		"entries": []map[string]any{
+			{"account_id": "treasury_crypto", "direction": "debit", "amount": amountInt, "asset": asset},
+			{"account_id": "operational_fiat", "direction": "credit", "amount": amountInt, "asset": asset},
+		},
+	}
+	return h.client.postJSON(ctx, url, body, key, nil)
 }
 
 // FakeLedger is a test double for LedgerAccounting.
