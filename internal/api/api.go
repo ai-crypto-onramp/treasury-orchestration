@@ -97,6 +97,10 @@ func (d *Deps) handleBatchByID(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusConflict, err.Error())
 				return
 			}
+			if store.IsNotFound(err) {
+				writeError(w, http.StatusNotFound, "batch not found")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

@@ -95,7 +95,8 @@ func (m *Manager) CreateFundingRequest(ctx context.Context, walletID, asset stri
 		if err != nil {
 			_ = m.deps.Funding.UpdateFundingStatus(ctx, fr.ID, store.FundingRejected)
 			metrics.FundingRequests.WithLabelValues(asset, "failed").Inc()
-			return fr, err
+			log.Printf("funding: wallet dispatch failed id=%d asset=%s: %v (request persisted as rejected)", fr.ID, asset, err)
+			return fr, nil
 		}
 	}
 	if err := m.deps.Funding.UpdateFundingStatus(ctx, fr.ID, store.FundingCompleted); err != nil {
