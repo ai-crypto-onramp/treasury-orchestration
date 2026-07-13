@@ -1,22 +1,43 @@
-.PHONY: build test run lint docker-build docker-run clean
+.PHONY: build test test-race test-integration lint vet cover run docker-up docker-down docker clean
 
 build:
-	go build -o bin/server .
+	go build -o bin/treasury ./cmd/treasury
 
 test:
-	go test ./... -race -coverprofile=coverage.out -coverpkg=./...
+	go test ./... -coverprofile=coverage.out -coverpkg=./...
 
-run:
-	go run .
+test-race:
+	go test -race ./... -coverprofile=coverage.out -coverpkg=./...
+
+test-integration:
+	docker compose up -d postgres redis
+	@echo "Waiting for Postgres + Redis to be healthy..."
+	@sleep 5
+	DB_URL=postgres://treasury:treasury@localhost:5432/treasury?sslmode=disable \
+	REDIS_URL=redis://localhost:6379/0 \
+	go test -tags=integration -race ./... -coverprofile=coverage.out -coverpkg=./...
+	docker compose down
 
 lint:
+	@which golangci-lint > /dev/null 2>&1 && golangci-lint run ./... || go vet ./...
+
+vet:
 	go vet ./...
 
-docker-build:
-	docker build -t ai-crypto-onramp/treasury-orchestration .
+cover: test
+	go tool cover -func=coverage.out | tail -1
 
-docker-run:
-	docker run --rm -p 8080:8080 ai-crypto-onramp/treasury-orchestration
+run:
+	go run ./cmd/treasury
+
+docker-up:
+	docker compose up -d --build
+
+docker-down:
+	docker compose down
+
+docker:
+	docker build -t ai-crypto-onramp/treasury-orchestration .
 
 clean:
 	rm -rf bin/ coverage.out

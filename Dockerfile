@@ -1,14 +1,17 @@
-FROM golang:1.22 AS builder
+# syntax=docker/dockerfile:1.6
+
+# --- builder ---
+FROM golang:1.22-alpine AS builder
 WORKDIR /src
-COPY go.mod ./
+RUN apk add --no-cache git ca-certificates
+COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /server .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/treasury ./cmd/treasury
 
-FROM alpine:3.20
-RUN apk add --no-cache wget
-COPY --from=builder /server /server
+# --- runtime ---
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /out/treasury /treasury
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -qO- http://localhost:8080/healthz || exit 1
-ENTRYPOINT ["/server"]
+USER nonroot:nonroot
+ENTRYPOINT ["/treasury"]

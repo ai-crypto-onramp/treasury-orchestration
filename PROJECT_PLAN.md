@@ -7,15 +7,15 @@ This plan decomposes the Treasury Orchestration service into ordered implementat
 Goal: Establish the durable persistence layer for all batch, membership, aggregate-order, funding, float, and rebalancing state.
 
 Tasks:
-- [ ] Add PostgreSQL connection bootstrap (`DB_URL`, `pgx`/`database/sql` pool).
-- [ ] Create migrations for `batches` (id, asset_pair, status, notional_usd, opened_at, closed_at).
-- [ ] Create migrations for `batch_memberships` (batch_id, tx_id, amount, asset, fiat_currency, created_at).
-- [ ] Create migrations for `aggregate_orders` (batch_id, venue_routes, fill_price, total_filled, status).
-- [ ] Create migrations for `funding_requests` (wallet_id, asset, amount, status, source_venue).
-- [ ] Create migrations for `float_positions` (fiat_currency, short_fiat_amount, long_crypto_amount, settlement_due_at, updated_at).
-- [ ] Create migrations for `rebalancing_jobs` (from, to, asset, amount, status, reason).
-- [ ] Add idempotency-key table backed by Redis for write-side replays.
-- [ ] Wire migration runner into `cmd/treasury` startup.
+- [x] Add PostgreSQL connection bootstrap (`DB_URL`, `pgx`/`database/sql` pool).
+- [x] Create migrations for `batches` (id, asset_pair, status, notional_usd, opened_at, closed_at).
+- [x] Create migrations for `batch_memberships` (batch_id, tx_id, amount, asset, fiat_currency, created_at).
+- [x] Create migrations for `aggregate_orders` (batch_id, venue_routes, fill_price, total_filled, status).
+- [x] Create migrations for `funding_requests` (wallet_id, asset, amount, status, source_venue).
+- [x] Create migrations for `float_positions` (fiat_currency, short_fiat_amount, long_crypto_amount, settlement_due_at, updated_at).
+- [x] Create migrations for `rebalancing_jobs` (from, to, asset, amount, status, reason).
+- [x] Add idempotency-key table backed by Redis for write-side replays.
+- [x] Wire migration runner into `cmd/treasury` startup.
 
 Acceptance criteria:
 - `go test ./...` covers migration up/down idempotency.
@@ -27,12 +27,12 @@ Acceptance criteria:
 Goal: Consume tx completion events from `transaction-orchestrator` off the event bus and persist them as pending batch memberships.
 
 Tasks:
-- [ ] Implement event subscriber for `TX_ORCH_EVENT_TOPIC` (`tx.completed`).
-- [ ] Define event payload schema (tx_id, amount, asset, fiat_currency, notional_usd, user_id, completed_at).
-- [ ] On receipt, create a `batch_membership` row linked to the currently-open batch for the asset pair (open one if none exists).
-- [ ] Handle idempotency: dedupe by `tx_id` via Redis idempotency key.
-- [ ] Emit structured log + Prometheus counter on every consumed event.
-- [ ] Add dead-letter handling for poison messages.
+- [x] Implement event subscriber for `TX_ORCH_EVENT_TOPIC` (`tx.completed`).
+- [x] Define event payload schema (tx_id, amount, asset, fiat_currency, notional_usd, user_id, completed_at).
+- [x] On receipt, create a `batch_membership` row linked to the currently-open batch for the asset pair (open one if none exists).
+- [x] Handle idempotency: dedupe by `tx_id` via Redis idempotency key.
+- [x] Emit structured log + Prometheus counter on every consumed event.
+- [x] Add dead-letter handling for poison messages.
 
 Acceptance criteria:
 - Replaying the same event produces no duplicate membership.
@@ -44,13 +44,13 @@ Acceptance criteria:
 Goal: Close batches deterministically on a time cadence, a notional size threshold, or manual operator trigger.
 
 Tasks:
-- [ ] Implement scheduler loop with `BATCH_INTERVAL_SECONDS` cadence tick.
-- [ ] Implement size-threshold check: `sum(memberships.notional_usd) >= BATCH_SIZE_THRESHOLD_USD`.
-- [ ] Implement `POST /v1/batches/:id/close` for manual close.
-- [ ] On close, transition batch `open -> closed` and persist `closed_at`.
-- [ ] Acquire Redis cadence lock per asset pair to prevent double-close under leader election.
-- [ ] Expose `GET /v1/batches` and `GET /v1/batches/:id` query endpoints.
-- [ ] Make thresholds per-asset-pair overridable via config.
+- [x] Implement scheduler loop with `BATCH_INTERVAL_SECONDS` cadence tick.
+- [x] Implement size-threshold check: `sum(memberships.notional_usd) >= BATCH_SIZE_THRESHOLD_USD`.
+- [x] Implement `POST /v1/batches/:id/close` for manual close.
+- [x] On close, transition batch `open -> closed` and persist `closed_at`.
+- [x] Acquire Redis cadence lock per asset pair to prevent double-close under leader election.
+- [x] Expose `GET /v1/batches` and `GET /v1/batches/:id` query endpoints.
+- [x] Make thresholds per-asset-pair overridable via config.
 
 Acceptance criteria:
 - A batch closes within `BATCH_INTERVAL_SECONDS + epsilon` of `opened_at` under steady load.
@@ -63,13 +63,13 @@ Acceptance criteria:
 Goal: Submit each closed batch as an aggregate parent order to `liquidity-routing` and persist the fill result.
 
 Tasks:
-- [ ] Implement `liquidity-routing` client (`LIQUIDITY_ROUTING_URL`) with retry + circuit breaker.
-- [ ] On batch close, build parent order payload (asset_pair, side=buy, total_filled target, notional).
-- [ ] Persist `aggregate_orders` row with status `executing` before submission.
-- [ ] On fill response, update `fill_price`, `total_filled`, `venue_routes`, status `settled`.
-- [ ] Transition batch `closed -> executing -> settled` to mirror order lifecycle.
-- [ ] Add idempotency key on the liquidity-routing call (batch_id).
-- [ ] Emit Prometheus histogram for slippage vs expected price.
+- [x] Implement `liquidity-routing` client (`LIQUIDITY_ROUTING_URL`) with retry + circuit breaker.
+- [x] On batch close, build parent order payload (asset_pair, side=buy, total_filled target, notional).
+- [x] Persist `aggregate_orders` row with status `executing` before submission.
+- [x] On fill response, update `fill_price`, `total_filled`, `venue_routes`, status `settled`.
+- [x] Transition batch `closed -> executing -> settled` to mirror order lifecycle.
+- [x] Add idempotency key on the liquidity-routing call (batch_id).
+- [x] Emit Prometheus histogram for slippage vs expected price.
 
 Acceptance criteria:
 - A closed batch results in exactly one parent order to liquidity-routing.
@@ -81,12 +81,12 @@ Acceptance criteria:
 Goal: Track the short-fiat / long-crypto position created by T+0 delivery and keep it within policy bounds.
 
 Tasks:
-- [ ] On aggregate fill, increment `float_positions` long_crypto_amount and short_fiat_amount for the fiat currency.
-- [ ] Record `settlement_due_at` as `now + T+n` for the fiat rail (T+2 or T+3 per currency config).
-- [ ] Implement `GET /v1/float/{fiat_currency}`.
-- [ ] Enforce `MIN_FLOAT_USD` / `MAX_FLOAT_USD` bounds; log + alert on breach.
-- [ ] On settlement-due date, mark fiat leg settled and decrement short_fiat_amount.
-- [ ] Sweep matured floats to minimize idle capital (capital efficiency policy).
+- [x] On aggregate fill, increment `float_positions` long_crypto_amount and short_fiat_amount for the fiat currency.
+- [x] Record `settlement_due_at` as `now + T+n` for the fiat rail (T+2 or T+3 per currency config).
+- [x] Implement `GET /v1/float/{fiat_currency}`.
+- [x] Enforce `MIN_FLOAT_USD` / `MAX_FLOAT_USD` bounds; log + alert on breach.
+- [x] On settlement-due date, mark fiat leg settled and decrement short_fiat_amount.
+- [x] Sweep matured floats to minimize idle capital (capital efficiency policy).
 
 Acceptance criteria:
 - Float position is consistent with sum of delivered crypto minus settled fiat.
@@ -98,13 +98,13 @@ Acceptance criteria:
 Goal: Pre-fund hot wallets ahead of projected demand and rebalance crypto/fiat across wallets and venues.
 
 Tasks:
-- [ ] Implement demand-projection model from inbound order velocity (rolling window).
-- [ ] Compute per-asset target balance from `HOT_WALLET_TARGET_BALANCE_<ASSET>`.
-- [ ] Create `funding_requests` (POST /v1/funding-requests) when projected balance < target.
-- [ ] Call `wallet-management` (`WALLET_MGMT_URL`) to execute funding moves.
-- [ ] Implement rebalancing loop: detect drift below target or venue excess; create `rebalancing_jobs`.
-- [ ] Enforce capital allocation policy: reject out-of-policy amounts, log violations.
-- [ ] Expose `GET /v1/rebalancing-jobs` with status filter.
+- [x] Implement demand-projection model from inbound order velocity (rolling window).
+- [x] Compute per-asset target balance from `HOT_WALLET_TARGET_BALANCE_<ASSET>`.
+- [x] Create `funding_requests` (POST /v1/funding-requests) when projected balance < target.
+- [x] Call `wallet-management` (`WALLET_MGMT_URL`) to execute funding moves.
+- [x] Implement rebalancing loop: detect drift below target or venue excess; create `rebalancing_jobs`.
+- [x] Enforce capital allocation policy: reject out-of-policy amounts, log violations.
+- [x] Expose `GET /v1/rebalancing-jobs` with status filter.
 
 Acceptance criteria:
 - Hot wallet never falls below target by more than the configured tolerance during peak velocity.
@@ -116,11 +116,11 @@ Acceptance criteria:
 Goal: Forward net aggregate FX exposure to `fx-hedging` for hedge execution.
 
 Tasks:
-- [ ] Implement `fx-hedging` client (`FX_HEDGING_URL`) with retry + circuit breaker.
-- [ ] After each aggregate fill, compute net FX exposure per fiat currency (short_fiat delta).
-- [ ] Submit exposure payload to fx-hedging; persist hedged_notional on the aggregate_order.
-- [ ] Add idempotency key (batch_id) on hedge calls.
-- [ ] Emit Prometheus gauge for unhedged exposure per currency.
+- [x] Implement `fx-hedging` client (`FX_HEDGING_URL`) with retry + circuit breaker.
+- [x] After each aggregate fill, compute net FX exposure per fiat currency (short_fiat delta).
+- [x] Submit exposure payload to fx-hedging; persist hedged_notional on the aggregate_order.
+- [x] Add idempotency key (batch_id) on hedge calls.
+- [x] Emit Prometheus gauge for unhedged exposure per currency.
 
 Acceptance criteria:
 - Every aggregate fill results in exactly one FX exposure submission.
@@ -132,12 +132,12 @@ Acceptance criteria:
 Goal: Post every capital movement to `ledger-accounting` and emit audit events for every aggregate action.
 
 Tasks:
-- [ ] Implement `ledger-accounting` client (`LEDGER_URL`) with idempotent postings.
-- [ ] Post on: batch close, aggregate fill, funding request, float adjustment, rebalance.
-- [ ] Implement `audit-event-log` client (`AUDIT_LOG_URL`) append-only emitter.
-- [ ] Emit audit event for: batch open/close, aggregate execution, funding, float adjustment, rebalance.
-- [ ] Add outbox pattern to guarantee ledger/audit delivery after local commit.
-- [ ] Add Prometheus counters for posting successes/failures.
+- [x] Implement `ledger-accounting` client (`LEDGER_URL`) with idempotent postings.
+- [x] Post on: batch close, aggregate fill, funding request, float adjustment, rebalance.
+- [x] Implement `audit-event-log` client (`AUDIT_LOG_URL`) append-only emitter.
+- [x] Emit audit event for: batch open/close, aggregate execution, funding, float adjustment, rebalance.
+- [x] Add outbox pattern to guarantee ledger/audit delivery after local commit.
+- [x] Add Prometheus counters for posting successes/failures.
 
 Acceptance criteria:
 - Every batch close/fill/funding/float/rebalance has matching ledger posting and audit event.
@@ -149,12 +149,12 @@ Acceptance criteria:
 Goal: Reach production-grade test coverage, containerization, and CI readiness.
 
 Tasks:
-- [ ] Add unit tests for scheduler, policy, float math, projection model, clients.
+- [x] Add unit tests for scheduler, policy, float math, projection model, clients.
 - [ ] Add integration tests with testcontainers (Postgres + Redis).
-- [ ] Add contract tests for liquidity-routing, wallet-management, fx-hedging, ledger, audit mocks.
-- [ ] Wire `go test -race -coverprofile` into CI; enforce coverage gate.
-- [ ] Finalize Dockerfile (multi-stage, scratch/distroless final).
-- [ ] Add Makefile targets: `test`, `test-integration`, `lint`, `cover`, `docker`.
+- [x] Add contract tests for liquidity-routing, wallet-management, fx-hedging, ledger, audit mocks.
+- [x] Wire `go test -race -coverprofile` into CI; enforce coverage gate.
+- [x] Finalize Dockerfile (multi-stage, scratch/distroless final).
+- [x] Add Makefile targets: `test`, `test-integration`, `lint`, `cover`, `docker`.
 - [ ] Verify Codecov upload works on CI.
 
 Acceptance criteria:
