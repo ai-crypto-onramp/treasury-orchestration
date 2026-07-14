@@ -228,13 +228,23 @@ func Build(cfg config.Config) (*Server, error) {
 	})
 
 	httpPush := eventbus.NewHTTPPush()
+	subscriber := eventbus.EventSubscriber(httpPush)
+	// When EVENT_BUS_URL is set (kafka://...), consume tx.completed events
+	// from Kafka instead of the in-memory HTTP-push bus.
+	if cfg.EventBusURL != "" {
+		if ks, err := eventbus.NewKafkaSubscriberFromURL(cfg.EventBusURL, cfg.EventBusGroupID); err == nil {
+			subscriber = ks
+		} else {
+			log.Printf("app: kafka subscriber init failed, using http-push: %v", err)
+		}
+	}
 
 	cons := consumer.New(consumer.Deps{
 		Topic:       cfg.TxOrchEventTopic,
 		Batches:     batchStore,
 		Memberships: membershipStore,
 		Idem:        idem,
-		Subscriber:  httpPush,
+		Subscriber:  subscriber,
 		OnBatchOpen: func(ctx context.Context, b *store.Batch) {
 			_ = emitter.Append(ctx, ledger.AggBatch, ledger.EvBatchOpen, ledger.Key(ledger.AggBatch, ledger.EvBatchOpen, b.ID), ledger.Payload{
 				BatchID: b.ID,

@@ -3,16 +3,15 @@
 // "tx.completed" events which Treasury consumes to create batch
 // memberships.
 //
-// To keep external dependencies minimal, the EventSubscriber is an
-// interface with two implementations:
+// The EventSubscriber interface has three implementations:
 //   - InMemorySubscriber: a channel-backed fan-in used by tests and the
 //     in-memory run mode.
 //   - HTTPPushSubscriber: accepts events over a local HTTP endpoint
 //     (/v1/events/tx.completed) so an upstream producer can POST events
-//     directly when a real broker (NATS/Kafka) is not deployed.
-//
-// A real NATS or Kafka adapter can be added later behind the same
-// interface without changing callers.
+//     directly when a real broker is not deployed.
+//   - KafkaSubscriber: consumes events from a Kafka topic using a
+//     consumer group (github.com/segmentio/kafka-go). Push is a no-op
+//     since the broker is the source of truth.
 package eventbus
 
 import (
@@ -20,7 +19,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
+
+	"github.com/segmentio/kafka-go"
 )
 
 // TxCompletedEvent is the payload emitted by transaction-orchestrator on
@@ -142,4 +144,107 @@ func (s *HTTPPushSubscriber) HTTPHandler() http.Handler {
 		}
 		w.WriteHeader(http.StatusAccepted)
 	})
+}
+
+// --- Kafka subscriber ---
+
+// KafkaSubscriber consumes tx completion events from a Kafka topic using a
+// consumer group. It implements EventSubscriber. Push is a no-op since the
+// broker is the source of truth; events arrive via Subscribe's reader loop.
+type KafkaSubscriber struct {
+	reader *kafka.Reader
+}
+
+// NewKafkaSubscriber returns a KafkaSubscriber backed by a kafka-go Reader
+// configured for the given group id. brokers is the bootstrap list; topic is
+// the Kafka topic to consume; groupID is the consumer group id.
+func NewKafkaSubscriber(brokers []string, topic, groupID string) (*KafkaSubscriber, error) {
+	if len(brokers) == 0 {
+		return nil, fmt.Errorf("eventbus kafka: no brokers provided")
+	}
+	if topic == "" {
+		topic = "tx.completed"
+	}
+	if groupID == "" {
+		groupID = "treasury-orchestration"
+	}
+	r := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  brokers,
+		Topic:    topic,
+		GroupID:  groupID,
+		MinBytes: 1,
+		MaxBytes: 10e6,
+	})
+	return &KafkaSubscriber{reader: r}, nil
+}
+
+// NewKafkaSubscriberFromURL parses a "kafka://host:9092[,host2][?topic=t]" URL
+// and returns a KafkaSubscriber.
+func NewKafkaSubscriberFromURL(url, groupID string) (*KafkaSubscriber, error) {
+	if !strings.HasPrefix(url, "kafka://") {
+		return nil, fmt.Errorf("eventbus: url must start with kafka://, got %q", url)
+	}
+	rest := strings.TrimPrefix(url, "kafka://")
+	topic := ""
+	if i := strings.Index(rest, "?"); i >= 0 {
+		q := rest[i+1:]
+		rest = rest[:i]
+		for _, kv := range strings.Split(q, "&") {
+			if strings.HasPrefix(kv, "topic=") {
+				topic = strings.TrimPrefix(kv, "topic=")
+			}
+		}
+	}
+	brokers := strings.Split(rest, ",")
+	clean := brokers[:0]
+	for _, b := range brokers {
+		b = strings.TrimSpace(b)
+		if b != "" {
+			clean = append(clean, b)
+		}
+	}
+	return NewKafkaSubscriber(clean, topic, groupID)
+}
+
+// Subscribe spawns a goroutine that reads messages from Kafka, decodes them
+// into TxCompletedEvent, and forwards to the returned channel. The stop
+// function closes the reader and releases the subscription. The topic
+// argument is advisory; the reader is already bound to a single topic.
+func (s *KafkaSubscriber) Subscribe(ctx context.Context, topic string) (<-chan TxCompletedEvent, func(), error) {
+	ch := make(chan TxCompletedEvent, 1024)
+	var closeOnce sync.Once
+	stop := func() {
+		closeOnce.Do(func() {
+			_ = s.reader.Close()
+			close(ch)
+		})
+	}
+	go func() {
+		defer stop()
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			m, err := s.reader.ReadMessage(ctx)
+			if err != nil {
+				return
+			}
+			var ev TxCompletedEvent
+			if err := json.Unmarshal(m.Value, &ev); err != nil {
+				continue
+			}
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, stop, nil
+}
+
+// Push is a no-op for the Kafka subscriber: events arrive exclusively via the
+// broker reader. It is provided to satisfy the EventSubscriber interface.
+func (s *KafkaSubscriber) Push(_ context.Context, _ string, _ TxCompletedEvent) error {
+	return nil
 }

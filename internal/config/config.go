@@ -27,6 +27,8 @@ type Config struct {
 	LedgerURL             string
 	AuditLogURL           string
 	TxOrchEventTopic      string
+	EventBusURL           string // kafka://host:9092[?topic=t]; when set, the consumer reads from Kafka instead of HTTP-push.
+	EventBusGroupID       string
 	LogLevel              string
 
 	// SettlementDays maps fiat currency -> T+n settlement days. Defaults
@@ -56,6 +58,8 @@ func Load() Config {
 		LedgerURL:             os.Getenv("LEDGER_URL"),
 		AuditLogURL:           os.Getenv("AUDIT_LOG_URL"),
 		TxOrchEventTopic:      envOr("TX_ORCH_EVENT_TOPIC", "tx.completed"),
+		EventBusURL:           os.Getenv("EVENT_BUS_URL"),
+		EventBusGroupID:       envOr("EVENT_BUS_GROUP_ID", "treasury-orchestration"),
 		LogLevel:              envOr("LOG_LEVEL", "info"),
 		SettlementDays: map[string]int{
 			"USD": envInt("SETTLEMENT_DAYS_USD", 2),
