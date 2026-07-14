@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration lint vet cover run docker-up docker-down docker clean
+.PHONY: build test test-race test-integration lint cover run docker-up docker-down docker clean
 
 build:
 	go build -o bin/treasury ./cmd/treasury
@@ -19,10 +19,7 @@ test-integration:
 	docker compose down
 
 lint:
-	@which golangci-lint > /dev/null 2>&1 && golangci-lint run ./... || go vet ./...
-
-vet:
-	go vet ./...
+	golangci-lint run
 
 cover: test
 	go tool cover -func=coverage.out | tail -1
