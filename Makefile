@@ -1,4 +1,4 @@
-.PHONY: build test test-integration lint cover run docker-build docker-run docker-up docker-down clean migrate-up migrate-down
+.PHONY: build test test-integration lint coverage run docker-build docker-run docker-up docker-down clean migrate-up migrate-down
 
 build:
 	go build -o bin/treasury ./cmd/treasury
@@ -18,7 +18,7 @@ test-integration:
 lint:
 	golangci-lint run
 
-cover: test
+coverage: test
 	go tool cover -func=coverage.out | tail -1
 
 run:
@@ -40,7 +40,7 @@ clean:
 	rm -rf bin/ coverage.out
 
 migrate-up:
-	DB_URL="$(DB_URL)" go run ./cmd/migrate --up
+	go run ./cmd/migrate --up
 
 migrate-down:
-	DB_URL="$(DB_URL)" go run ./cmd/migrate --down
+	go run ./cmd/migrate --down
