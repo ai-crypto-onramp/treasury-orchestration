@@ -4,10 +4,10 @@ build:
 	go build -o bin/treasury ./cmd/treasury
 
 test:
-	go test ./... -coverprofile=coverage.out -coverpkg=./...
+	go test ./cmd/... ./internal/... -coverprofile=coverage.out -coverpkg=./cmd/...,./internal/...
 
 test-race:
-	go test -race ./... -coverprofile=coverage.out -coverpkg=./...
+	go test -race ./cmd/... ./internal/... -coverprofile=coverage.out -coverpkg=./cmd/...,./internal/...
 
 test-integration:
 	docker compose up -d postgres redis
@@ -15,7 +15,7 @@ test-integration:
 	@sleep 5
 	DB_URL=postgres://treasury:treasury@localhost:5432/treasury?sslmode=disable \
 	REDIS_URL=redis://localhost:6379/0 \
-	go test -tags=integration -race ./... -coverprofile=coverage.out -coverpkg=./...
+	go test -tags=integration -race ./cmd/... ./internal/... -coverprofile=coverage.out -coverpkg=./cmd/...,./internal/...
 	docker compose down
 
 lint:
