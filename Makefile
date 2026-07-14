@@ -1,13 +1,10 @@
-.PHONY: build test test-race test-integration lint cover run docker-up docker-down docker clean
+.PHONY: build test test-integration lint cover run docker-build docker-run docker-up docker-down clean
 
 build:
 	go build -o bin/treasury ./cmd/treasury
 
 test:
-	go test ./cmd/... ./internal/... -coverprofile=coverage.out -coverpkg=./cmd/...,./internal/...
-
-test-race:
-	go test -race ./cmd/... ./internal/... -coverprofile=coverage.out -coverpkg=./cmd/...,./internal/...
+	go test ./cmd/... ./internal/... -race -coverprofile=coverage.out -coverpkg=./cmd/...,./internal/...
 
 test-integration:
 	docker compose up -d postgres redis
@@ -27,14 +24,17 @@ cover: test
 run:
 	go run ./cmd/treasury
 
+docker-build:
+	docker build -t ai-crypto-onramp/treasury-orchestration .
+
+docker-run:
+	docker run --rm -p 8080:8080 ai-crypto-onramp/treasury-orchestration
+
 docker-up:
 	docker compose up -d --build
 
 docker-down:
 	docker compose down
-
-docker:
-	docker build -t ai-crypto-onramp/treasury-orchestration .
 
 clean:
 	rm -rf bin/ coverage.out
