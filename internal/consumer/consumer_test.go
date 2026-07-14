@@ -297,7 +297,6 @@ func (errSubscriber) Push(context.Context, string, eventbus.TxCompletedEvent) er
 
 type closeChanSubscriber struct {
 	ch   chan eventbus.TxCompletedEvent
-	stop func()
 }
 
 func (s *closeChanSubscriber) Subscribe(context.Context, string) (<-chan eventbus.TxCompletedEvent, func(), error) {
@@ -339,7 +338,6 @@ func (errMembershipStore) ExistsByTxID(context.Context, string) (bool, error)  {
 // addErrMembershipStore succeeds on ExistsByTxID / ListMemberships but
 // errors on AddMembership.
 type addErrMembershipStore struct {
-	errMembershipStore
 	rows []*store.Membership
 }
 
