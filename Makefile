@@ -1,4 +1,4 @@
-.PHONY: build test test-integration lint cover run docker-build docker-run docker-up docker-down clean
+.PHONY: build test test-integration lint cover run docker-build docker-run docker-up docker-down clean migrate-up migrate-down
 
 build:
 	go build -o bin/treasury ./cmd/treasury
@@ -38,3 +38,9 @@ docker-down:
 
 clean:
 	rm -rf bin/ coverage.out
+
+migrate-up:
+	DB_URL="$(DB_URL)" go run ./cmd/migrate --up
+
+migrate-down:
+	DB_URL="$(DB_URL)" go run ./cmd/migrate --down
