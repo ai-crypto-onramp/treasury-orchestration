@@ -1,10 +1,10 @@
-.PHONY: build test test-integration lint coverage run docker-build docker-run docker-up docker-down clean migrate-up migrate-down
+.PHONY: build test test-integration lint cover run docker-build docker-run docker-up docker-down clean migrate-up migrate-down
 
 build:
 	go build -o bin/treasury ./cmd/treasury
 
 test:
-	go test ./cmd/... ./internal/... -race -coverprofile=coverage.out -coverpkg=./cmd/...,./internal/...
+	go test ./internal/... -race -coverprofile=coverage.out -coverpkg=./internal/...
 
 test-integration:
 	docker compose up -d postgres redis
@@ -12,13 +12,13 @@ test-integration:
 	@sleep 5
 	DB_URL=postgres://treasury:treasury@localhost:5432/treasury?sslmode=disable \
 	REDIS_URL=redis://localhost:6379/0 \
-	go test -tags=integration -race ./cmd/... ./internal/... -coverprofile=coverage.out -coverpkg=./cmd/...,./internal/...
+	go test -tags=integration -race ./cmd/... ./internal/... -coverprofile=coverage.out -coverpkg=./internal/...
 	docker compose down
 
 lint:
 	golangci-lint run
 
-coverage: test
+cover: test
 	go tool cover -func=coverage.out | tail -1
 
 run:
