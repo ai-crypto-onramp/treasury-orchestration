@@ -86,47 +86,15 @@ func (d *Deps) handleBatchByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid batch id")
 		return
 	}
-	if len(parts) >= 2 && parts[1] == "close" {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	if len(parts) >= 2 {
+		switch parts[1] {
+		case "close":
+			d.handleBatchClose(w, r, id)
+			return
+		case "memberships":
+			d.handleBatchMemberships(w, r, id)
 			return
 		}
-		if d.Scheduler == nil {
-			writeError(w, http.StatusServiceUnavailable, "scheduler not configured")
-			return
-		}
-		b, err := d.Scheduler.CloseBatch(r.Context(), id)
-		if err != nil {
-			if err == batch.ErrNotOpen {
-				writeError(w, http.StatusConflict, err.Error())
-				return
-			}
-			if store.IsNotFound(err) {
-				writeError(w, http.StatusNotFound, "batch not found")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, b)
-		return
-	}
-	if len(parts) >= 2 && parts[1] == "memberships" {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		if d.Members == nil {
-			writeError(w, http.StatusServiceUnavailable, "membership store not configured")
-			return
-		}
-		members, err := d.Members.ListMemberships(r.Context(), id)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"memberships": members})
-		return
 	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -154,6 +122,50 @@ func (d *Deps) handleBatchByID(w http.ResponseWriter, r *http.Request) {
 		"memberships": members,
 		"order":      order,
 	})
+}
+
+// POST /v1/batches/:id/close
+func (d *Deps) handleBatchClose(w http.ResponseWriter, r *http.Request, id int64) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if d.Scheduler == nil {
+		writeError(w, http.StatusServiceUnavailable, "scheduler not configured")
+		return
+	}
+	b, err := d.Scheduler.CloseBatch(r.Context(), id)
+	if err != nil {
+		if err == batch.ErrNotOpen {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if store.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "batch not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, b)
+}
+
+// GET /v1/batches/:id/memberships
+func (d *Deps) handleBatchMemberships(w http.ResponseWriter, r *http.Request, id int64) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if d.Members == nil {
+		writeError(w, http.StatusServiceUnavailable, "membership store not configured")
+		return
+	}
+	members, err := d.Members.ListMemberships(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"memberships": members})
 }
 
 // GET /v1/float (list all currencies)
