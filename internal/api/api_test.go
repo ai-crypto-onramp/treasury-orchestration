@@ -578,6 +578,84 @@ func TestNewRouter_NilDepsOmitsRoutes(t *testing.T) {
 
 // --- fakes ---
 
+func TestBatchMemberships(t *testing.T) {
+	ctx := context.Background()
+	d, all, _ := newDeps(t)
+	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
+	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", Asset: "BTC", FiatCurrency: "USD", NotionalUSD: 1000})
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/batches/" + itoa(b.ID) + "/memberships")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d", resp.StatusCode)
+	}
+	var out struct {
+		Memberships []*store.Membership `json:"memberships"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if len(out.Memberships) != 1 {
+		t.Fatalf("members=%d want 1", len(out.Memberships))
+	}
+}
+
+func TestFloatList(t *testing.T) {
+	ctx := context.Background()
+	d, all, _ := newDeps(t)
+	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 1000, LongCryptoAmount: 0.01, LongCryptoAsset: "BTC"})
+	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "EUR", ShortFiatAmount: 500, LongCryptoAmount: 0.005, LongCryptoAsset: "BTC"})
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/float")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d", resp.StatusCode)
+	}
+	var out struct {
+		FloatPositions []*store.FloatPosition `json:"float_positions"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if len(out.FloatPositions) != 2 {
+		t.Fatalf("positions=%d want 2", len(out.FloatPositions))
+	}
+}
+
+func TestAggregateOrdersList(t *testing.T) {
+	ctx := context.Background()
+	d, all, _ := newDeps(t)
+	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: 1, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
+	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: 2, AssetPair: "ETH/USD", NotionalUSD: 30000, Status: store.AggregateSettled})
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/aggregate-orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d", resp.StatusCode)
+	}
+	var out struct {
+		AggregateOrders []*store.AggregateOrder `json:"aggregate_orders"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if len(out.AggregateOrders) != 2 {
+		t.Fatalf("orders=%d want 2", len(out.AggregateOrders))
+	}
+	resp2, err := http.Get(srv.URL + "/v1/aggregate-orders?status=settled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = json.NewDecoder(resp2.Body).Decode(&out)
+	if len(out.AggregateOrders) != 1 || out.AggregateOrders[0].Status != store.AggregateSettled {
+		t.Fatalf("settled filter: got %+v", out.AggregateOrders)
+	}
+}
+
+
 var errAPI = errors.New("api store boom")
 
 type errBatchStore struct{ err error }

@@ -65,6 +65,11 @@ func (t *Tracker) Get(ctx context.Context, fiatCurrency string) (*store.FloatPos
 	return t.deps.Floats.GetFloat(ctx, fiatCurrency)
 }
 
+// List returns the aggregate float position for every fiat currency.
+func (t *Tracker) List(ctx context.Context) ([]*store.FloatPosition, error) {
+	return t.deps.Floats.ListFloat(ctx)
+}
+
 // enforceBounds checks MIN_FLOAT_USD / MAX_FLOAT_USD and emits alerts /
 // breach signals on violation.
 func (t *Tracker) enforceBounds(ctx context.Context, fiat string) {

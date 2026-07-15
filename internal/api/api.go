@@ -36,11 +36,15 @@ func NewRouter(d *Deps) http.Handler {
 		mux.HandleFunc("/v1/batches/", d.handleBatchByID)
 	}
 	if d.Float != nil {
+		mux.HandleFunc("/v1/float", d.handleFloatList)
 		mux.HandleFunc("/v1/float/", d.handleFloat)
 	}
 	if d.Funding != nil {
 		mux.HandleFunc("/v1/funding-requests", d.handleFunding)
 		mux.HandleFunc("/v1/rebalancing-jobs", d.handleRebalancing)
+	}
+	if d.Orders != nil {
+		mux.HandleFunc("/v1/aggregate-orders", d.handleAggregateOrders)
 	}
 	return mux
 }
@@ -107,6 +111,23 @@ func (d *Deps) handleBatchByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, b)
 		return
 	}
+	if len(parts) >= 2 && parts[1] == "memberships" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if d.Members == nil {
+			writeError(w, http.StatusServiceUnavailable, "membership store not configured")
+			return
+		}
+		members, err := d.Members.ListMemberships(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"memberships": members})
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -135,6 +156,23 @@ func (d *Deps) handleBatchByID(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GET /v1/float (list all currencies)
+func (d *Deps) handleFloatList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	positions, err := d.Float.List(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if positions == nil {
+		positions = []*store.FloatPosition{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"float_positions": positions})
+}
+
 // GET /v1/float/{fiat_currency}
 func (d *Deps) handleFloat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -152,6 +190,24 @@ func (d *Deps) handleFloat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, pos)
+}
+
+// GET /v1/aggregate-orders?status=
+func (d *Deps) handleAggregateOrders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	status := r.URL.Query().Get("status")
+	orders, err := d.Orders.ListOrders(r.Context(), status)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if orders == nil {
+		orders = []*store.AggregateOrder{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"aggregate_orders": orders})
 }
 
 // POST /v1/funding-requests, GET /v1/funding-requests?status=

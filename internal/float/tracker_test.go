@@ -248,6 +248,9 @@ func (errFloatStore) GetFloat(context.Context, string) (*store.FloatPosition, er
 func (errFloatStore) ListMaturedFloat(context.Context, time.Time) ([]*store.FloatPosition, error) {
 	return nil, errFloat
 }
+func (errFloatStore) ListFloat(context.Context) ([]*store.FloatPosition, error) {
+	return nil, errFloat
+}
 func (errFloatStore) SettleFloat(context.Context, int64) (*store.FloatPosition, error) {
 	return nil, errFloat
 }
@@ -267,6 +270,9 @@ func (s *settleErrFloatStore) GetFloat(context.Context, string) (*store.FloatPos
 }
 func (s *settleErrFloatStore) ListMaturedFloat(_ context.Context, _ time.Time) ([]*store.FloatPosition, error) {
 	return []*store.FloatPosition{{ID: 1, FiatCurrency: "USD", ShortFiatAmount: 100, SettlementDueAt: time.Now().UTC().Add(-time.Hour)}}, nil
+}
+func (s *settleErrFloatStore) ListFloat(context.Context) ([]*store.FloatPosition, error) {
+	return nil, errFloat
 }
 func (s *settleErrFloatStore) SettleFloat(context.Context, int64) (*store.FloatPosition, error) {
 	return nil, errFloat

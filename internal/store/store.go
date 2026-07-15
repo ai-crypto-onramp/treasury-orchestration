@@ -183,6 +183,7 @@ type MembershipStore interface {
 type AggregateOrderStore interface {
 	CreateOrder(ctx context.Context, o *AggregateOrder) (*AggregateOrder, error)
 	GetOrderByBatch(ctx context.Context, batchID int64) (*AggregateOrder, error)
+	ListOrders(ctx context.Context, status string) ([]*AggregateOrder, error)
 	UpdateOrderFill(ctx context.Context, batchID int64, fillPrice, totalFilled float64, venueRoutes []VenueRoute) (*AggregateOrder, error)
 	SettleOrder(ctx context.Context, batchID int64, hedgedNotional float64) (*AggregateOrder, error)
 }
@@ -199,6 +200,7 @@ type FundingStore interface {
 type FloatStore interface {
 	AddFloat(ctx context.Context, p *FloatPosition) (*FloatPosition, error)
 	GetFloat(ctx context.Context, fiatCurrency string) (*FloatPosition, error)
+	ListFloat(ctx context.Context) ([]*FloatPosition, error)
 	ListMaturedFloat(ctx context.Context, before time.Time) ([]*FloatPosition, error)
 	SettleFloat(ctx context.Context, id int64) (*FloatPosition, error)
 }

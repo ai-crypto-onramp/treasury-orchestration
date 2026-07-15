@@ -258,6 +258,21 @@ func (s *AggregateOrderStore) GetOrderByBatch(_ context.Context, batchID int64) 
 	return nil, store.ErrNotFound
 }
 
+func (s *AggregateOrderStore) ListOrders(_ context.Context, status string) ([]*store.AggregateOrder, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*store.AggregateOrder
+	for _, r := range s.rows {
+		if status != "" && string(r.Status) != status {
+			continue
+		}
+		c := *r
+		out = append(out, &c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 func (s *AggregateOrderStore) UpdateOrderFill(_ context.Context, batchID int64, fillPrice, totalFilled float64, venueRoutes []store.VenueRoute) (*store.AggregateOrder, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -412,6 +427,35 @@ func (s *FloatStore) GetFloat(_ context.Context, fiatCurrency string) (*store.Fl
 		return &store.FloatPosition{FiatCurrency: fiatCurrency}, nil
 	}
 	return agg, nil
+}
+
+func (s *FloatStore) ListFloat(_ context.Context) ([]*store.FloatPosition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	byCcy := map[string]*store.FloatPosition{}
+	var order []string
+	for _, r := range s.rows {
+		agg, ok := byCcy[r.FiatCurrency]
+		if !ok {
+			agg = &store.FloatPosition{FiatCurrency: r.FiatCurrency, LongCryptoAsset: r.LongCryptoAsset}
+			byCcy[r.FiatCurrency] = agg
+			order = append(order, r.FiatCurrency)
+		}
+		agg.ShortFiatAmount += r.ShortFiatAmount
+		agg.LongCryptoAmount += r.LongCryptoAmount
+		if r.LongCryptoAsset != "" {
+			agg.LongCryptoAsset = r.LongCryptoAsset
+		}
+		if r.SettlementDueAt.After(agg.SettlementDueAt) {
+			agg.SettlementDueAt = r.SettlementDueAt
+		}
+	}
+	sort.Strings(order)
+	out := make([]*store.FloatPosition, 0, len(order))
+	for _, c := range order {
+		out = append(out, byCcy[c])
+	}
+	return out, nil
 }
 
 func (s *FloatStore) ListMaturedFloat(_ context.Context, before time.Time) ([]*store.FloatPosition, error) {

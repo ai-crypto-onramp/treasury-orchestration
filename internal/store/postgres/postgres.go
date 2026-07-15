@@ -356,6 +356,34 @@ func (s *AggregateOrderStore) GetOrderByBatch(ctx context.Context, batchID int64
 	return &o, nil
 }
 
+func (s *AggregateOrderStore) ListOrders(ctx context.Context, status string) ([]*store.AggregateOrder, error) {
+	q := `SELECT id, batch_id, asset_pair, side, notional_usd, venue_routes, fill_price, total_filled, hedged_notional, status, created_at, COALESCE(settled_at, now()) FROM aggregate_orders`
+	var args []any
+	if status != "" {
+		q += " WHERE status=$1"
+		args = []any{status}
+	}
+	q += " ORDER BY id ASC"
+	rows, err := s.db.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*store.AggregateOrder
+	for rows.Next() {
+		var o store.AggregateOrder
+		var routesJSON []byte
+		var settledAt time.Time
+		if err := rows.Scan(&o.ID, &o.BatchID, &o.AssetPair, &o.Side, &o.NotionalUSD, &routesJSON, &o.FillPrice, &o.TotalFilled, &o.HedgedNotional, &o.Status, &o.CreatedAt, &settledAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(routesJSON, &o.VenueRoutes)
+		o.SettledAt = settledAt
+		out = append(out, &o)
+	}
+	return out, rows.Err()
+}
+
 func (s *AggregateOrderStore) UpdateOrderFill(ctx context.Context, batchID int64, fillPrice, totalFilled float64, venueRoutes []store.VenueRoute) (*store.AggregateOrder, error) {
 	routesJSON, _ := json.Marshal(venueRoutes)
 	if _, err := s.db.Exec(ctx,
@@ -497,6 +525,26 @@ func (s *FloatStore) GetFloat(ctx context.Context, fiatCurrency string) (*store.
 		return nil, err
 	}
 	return &p, nil
+}
+
+func (s *FloatStore) ListFloat(ctx context.Context) ([]*store.FloatPosition, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT fiat_currency, COALESCE(SUM(short_fiat_amount),0), COALESCE(SUM(long_crypto_amount),0),
+		        COALESCE(MAX(long_crypto_asset),''), COALESCE(MAX(settlement_due_at),now())
+		 FROM float_positions GROUP BY fiat_currency ORDER BY fiat_currency ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*store.FloatPosition
+	for rows.Next() {
+		var p store.FloatPosition
+		if err := rows.Scan(&p.FiatCurrency, &p.ShortFiatAmount, &p.LongCryptoAmount, &p.LongCryptoAsset, &p.SettlementDueAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &p)
+	}
+	return out, rows.Err()
 }
 
 func (s *FloatStore) ListMaturedFloat(ctx context.Context, before time.Time) ([]*store.FloatPosition, error) {
