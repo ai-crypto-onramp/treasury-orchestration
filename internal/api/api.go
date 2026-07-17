@@ -6,9 +6,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/batch"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/float"
@@ -81,7 +82,7 @@ func (d *Deps) handleBatchByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing batch id")
 		return
 	}
-	id, err := strconv.ParseInt(parts[0], 10, 64)
+	id, err := uuid.Parse(parts[0])
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid batch id")
 		return
@@ -118,14 +119,14 @@ func (d *Deps) handleBatchByID(w http.ResponseWriter, r *http.Request) {
 		members, _ = d.Members.ListMemberships(r.Context(), id)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"batch":      b,
+		"batch":       b,
 		"memberships": members,
-		"order":      order,
+		"order":       order,
 	})
 }
 
 // POST /v1/batches/:id/close
-func (d *Deps) handleBatchClose(w http.ResponseWriter, r *http.Request, id int64) {
+func (d *Deps) handleBatchClose(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -151,7 +152,7 @@ func (d *Deps) handleBatchClose(w http.ResponseWriter, r *http.Request, id int64
 }
 
 // GET /v1/batches/:id/memberships
-func (d *Deps) handleBatchMemberships(w http.ResponseWriter, r *http.Request, id int64) {
+func (d *Deps) handleBatchMemberships(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return

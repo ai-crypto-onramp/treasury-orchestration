@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/aggregate"
@@ -158,7 +159,7 @@ func Build(cfg config.Config) (*Server, error) {
 	floatTracker := float.New(float.Deps{
 		Cfg:    cfg,
 		Floats: floatStore,
-		OnAdjust: func(ctx context.Context, fiat string, amount float64, batchID int64) {
+		OnAdjust: func(ctx context.Context, fiat string, amount float64, batchID uuid.UUID) {
 			_ = emitter.Append(ctx, ledger.AggFloat, ledger.EvFloatAdjust, ledger.Key(ledger.AggFloat, ledger.EvFloatAdjust, batchID), ledger.Payload{
 				BatchID:      batchID,
 				NotionalUSD:  amount,

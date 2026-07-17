@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
@@ -18,8 +20,9 @@ func TestHedger_OnAggregateFillSubmitsExposure(t *testing.T) {
 	h := New(Deps{FX: fx, Orders: all.Order, Idem: idem})
 
 	// Create an aggregate order row first.
-	o, _ := all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: 1, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
-	batch := &store.Batch{ID: 1, AssetPair: "BTC/USD"}
+	batchID, _ := uuid.NewV7()
+	o, _ := all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: batchID, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
+	batch := &store.Batch{ID: batchID, AssetPair: "BTC/USD"}
 
 	updated, err := h.OnAggregateFill(ctx, batch, o, "USD")
 	if err != nil {
@@ -46,13 +49,14 @@ func TestHedger_IdempotentReplayDoesNotDoubleHedge(t *testing.T) {
 	idem := idempotency.NewMem()
 	fx := clients.NewFakeFX(clients.HedgeResult{HedgedNotional: 50000})
 	h := New(Deps{FX: fx, Orders: all.Order, Idem: idem})
-	o, _ := all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: 1, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
-	batch := &store.Batch{ID: 1, AssetPair: "BTC/USD"}
+	batchID, _ := uuid.NewV7()
+	o, _ := all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: batchID, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
+	batch := &store.Batch{ID: batchID, AssetPair: "BTC/USD"}
 	if _, err := h.OnAggregateFill(ctx, batch, o, "USD"); err != nil {
 		t.Fatal(err)
 	}
 	// Replay: the idem key is already marked, so no second hedge call.
-	o2, _ := all.Order.GetOrderByBatch(ctx, 1)
+	o2, _ := all.Order.GetOrderByBatch(ctx, batchID)
 	if _, err := h.OnAggregateFill(ctx, batch, o2, "USD"); err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +73,9 @@ func TestHedger_ErrorPropagatesAndSetsUnhedged(t *testing.T) {
 	fx := clients.NewFakeFX(clients.HedgeResult{})
 	fx.SetError(clients.ErrUnavailable)
 	h := New(Deps{FX: fx, Orders: all.Order, Idem: idem})
-	o, _ := all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: 1, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
-	batch := &store.Batch{ID: 1, AssetPair: "BTC/USD"}
+	batchID, _ := uuid.NewV7()
+	o, _ := all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: batchID, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
+	batch := &store.Batch{ID: batchID, AssetPair: "BTC/USD"}
 	if _, err := h.OnAggregateFill(ctx, batch, o, "USD"); err == nil {
 		t.Fatal("expected error")
 	}

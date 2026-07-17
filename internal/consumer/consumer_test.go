@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/eventbus"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
@@ -157,7 +159,7 @@ func TestConsumer_HandleNotionalFallback(t *testing.T) {
 func TestConsumer_HandleOnBatchOpenHook(t *testing.T) {
 	ctx := context.Background()
 	c, _, _, _ := newDeps(t)
-	opened := make(chan int64, 4)
+	opened := make(chan uuid.UUID, 4)
 	c.Deps.OnBatchOpen = func(_ context.Context, b *store.Batch) { opened <- b.ID }
 	// First event opens a new batch.
 	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "h1", Asset: "BTC", FiatCurrency: "USD"})
@@ -165,8 +167,8 @@ func TestConsumer_HandleOnBatchOpenHook(t *testing.T) {
 	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "h2", Asset: "BTC", FiatCurrency: "USD"})
 	select {
 	case id := <-opened:
-		if id <= 0 {
-			t.Fatalf("expected positive batch id, got %d", id)
+		if id == uuid.Nil {
+			t.Fatalf("expected non-nil batch id, got %s", id)
 		}
 	default:
 		t.Fatal("expected OnBatchOpen to fire for the first event")
@@ -233,9 +235,10 @@ func TestConsumer_HandleDurableDupSkips(t *testing.T) {
 	// Pre-populate the membership store with the tx so the durable dedup
 	// path triggers (the idem store still claims the key, but ExistsByTxID
 	// returns true).
-	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: 1, TxID: "dd", Asset: "BTC", FiatCurrency: "USD"})
+	batchID, _ := uuid.NewV7()
+	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: batchID, TxID: "dd", Asset: "BTC", FiatCurrency: "USD"})
 	c.handle(ctx, eventbus.TxCompletedEvent{TxID: "dd", Asset: "BTC", FiatCurrency: "USD"})
-	ms, _ := all.Membership.ListMemberships(ctx, 1)
+	ms, _ := all.Membership.ListMemberships(ctx, batchID)
 	if len(ms) != 1 {
 		t.Fatalf("expected 1 membership (durable dup skipped), got %d", len(ms))
 	}
@@ -314,26 +317,28 @@ var errStore = errors.New("store boom")
 type errBatchStore struct{}
 
 func (errBatchStore) OpenBatch(context.Context, string) (*store.Batch, error) { return nil, errStore }
-func (errBatchStore) GetBatch(context.Context, int64) (*store.Batch, error)   { return nil, errStore }
+func (errBatchStore) GetBatch(context.Context, uuid.UUID) (*store.Batch, error) {
+	return nil, errStore
+}
 func (errBatchStore) ListBatches(context.Context, time.Time, time.Time) ([]*store.Batch, error) {
 	return nil, errStore
 }
 func (errBatchStore) ListOpenBatches(context.Context) ([]*store.Batch, error) { return nil, errStore }
-func (errBatchStore) UpdateBatchStatus(context.Context, int64, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
+func (errBatchStore) UpdateBatchStatus(context.Context, uuid.UUID, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
 	return nil, false, errStore
 }
-func (errBatchStore) SetBatchNotional(context.Context, int64, float64) error { return errStore }
+func (errBatchStore) SetBatchNotional(context.Context, uuid.UUID, float64) error { return errStore }
 
 type errMembershipStore struct{}
 
 func (errMembershipStore) AddMembership(context.Context, *store.Membership) (bool, error) {
 	return false, errStore
 }
-func (errMembershipStore) ListMemberships(context.Context, int64) ([]*store.Membership, error) {
+func (errMembershipStore) ListMemberships(context.Context, uuid.UUID) ([]*store.Membership, error) {
 	return nil, errStore
 }
-func (errMembershipStore) SumNotional(context.Context, int64) (float64, error) { return 0, errStore }
-func (errMembershipStore) ExistsByTxID(context.Context, string) (bool, error)  { return false, errStore }
+func (errMembershipStore) SumNotional(context.Context, uuid.UUID) (float64, error) { return 0, errStore }
+func (errMembershipStore) ExistsByTxID(context.Context, string) (bool, error)       { return false, errStore }
 
 // addErrMembershipStore succeeds on ExistsByTxID / ListMemberships but
 // errors on AddMembership.
@@ -341,11 +346,11 @@ type addErrMembershipStore struct {
 	rows []*store.Membership
 }
 
-func (a *addErrMembershipStore) ListMemberships(_ context.Context, _ int64) ([]*store.Membership, error) {
+func (a *addErrMembershipStore) ListMemberships(_ context.Context, _ uuid.UUID) ([]*store.Membership, error) {
 	return a.rows, nil
 }
 func (a *addErrMembershipStore) ExistsByTxID(context.Context, string) (bool, error) { return false, nil }
 func (a *addErrMembershipStore) AddMembership(context.Context, *store.Membership) (bool, error) {
 	return false, errStore
 }
-func (a *addErrMembershipStore) SumNotional(context.Context, int64) (float64, error) { return 0, nil }
+func (a *addErrMembershipStore) SumNotional(context.Context, uuid.UUID) (float64, error) { return 0, nil }

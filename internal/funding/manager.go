@@ -81,9 +81,9 @@ func (m *Manager) CreateFundingRequest(ctx context.Context, walletID, asset stri
 		m.deps.OnFunding(ctx, fr)
 	}
 	// Execute via wallet-management.
-	key := fmt.Sprintf("fund:%d", fr.ID)
+	key := fmt.Sprintf("fund:%s", fr.ID)
 	if _, err := m.deps.Idem.CheckAndMark(ctx, key, 24*time.Hour); err != nil {
-		log.Printf("funding: idem check id=%d: %v", fr.ID, err)
+		log.Printf("funding: idem check id=%s: %v", fr.ID, err)
 	}
 	if m.deps.Wallet != nil {
 		_, err := m.deps.Wallet.Fund(ctx, clients.FundingMoveRequest{
@@ -95,7 +95,7 @@ func (m *Manager) CreateFundingRequest(ctx context.Context, walletID, asset stri
 		if err != nil {
 			_ = m.deps.Funding.UpdateFundingStatus(ctx, fr.ID, store.FundingRejected)
 			metrics.FundingRequests.WithLabelValues(asset, "failed").Inc()
-			log.Printf("funding: wallet dispatch failed id=%d asset=%s: %v (request persisted as rejected)", fr.ID, asset, err)
+			log.Printf("funding: wallet dispatch failed id=%s asset=%s: %v (request persisted as rejected)", fr.ID, asset, err)
 			return fr, nil
 		}
 	}
@@ -103,7 +103,7 @@ func (m *Manager) CreateFundingRequest(ctx context.Context, walletID, asset stri
 		return fr, err
 	}
 	metrics.FundingRequests.WithLabelValues(asset, "ok").Inc()
-	log.Printf("funding: completed id=%d wallet=%s asset=%s amount=%.2f", fr.ID, walletID, asset, amount)
+	log.Printf("funding: completed id=%s wallet=%s asset=%s amount=%.2f", fr.ID, walletID, asset, amount)
 	return fr, nil
 }
 
@@ -136,9 +136,9 @@ func (m *Manager) Rebalance(ctx context.Context, fromRef, toRef, asset string, a
 	if m.deps.OnRebalance != nil {
 		m.deps.OnRebalance(ctx, job)
 	}
-	key := fmt.Sprintf("rebal:%d", job.ID)
+	key := fmt.Sprintf("rebal:%s", job.ID)
 	if _, err := m.deps.Idem.CheckAndMark(ctx, key, 24*time.Hour); err != nil {
-		log.Printf("rebalance: idem check id=%d: %v", job.ID, err)
+		log.Printf("rebalance: idem check id=%s: %v", job.ID, err)
 	}
 	if m.deps.Wallet != nil {
 		_, err := m.deps.Wallet.Fund(ctx, clients.FundingMoveRequest{
@@ -157,7 +157,7 @@ func (m *Manager) Rebalance(ctx context.Context, fromRef, toRef, asset string, a
 		return job, err
 	}
 	metrics.RebalanceJobs.WithLabelValues(asset, "ok").Inc()
-	log.Printf("rebalance: completed id=%d asset=%s amount=%.2f", job.ID, asset, amount)
+	log.Printf("rebalance: completed id=%s asset=%s amount=%.2f", job.ID, asset, amount)
 	return job, nil
 }
 

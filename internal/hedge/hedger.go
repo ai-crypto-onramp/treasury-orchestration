@@ -34,14 +34,14 @@ func New(deps Deps) *Hedger { return &Hedger{deps: deps} }
 // submits it to fx-hedging. Persists hedged_notional on the aggregate
 // order. Idempotent on batch_id.
 func (h *Hedger) OnAggregateFill(ctx context.Context, batch *store.Batch, order *store.AggregateOrder, fiatCurrency string) (*store.AggregateOrder, error) {
-	key := fmt.Sprintf("hedge:%d", batch.ID)
+	key := fmt.Sprintf("hedge:%s", batch.ID)
 	ok, err := h.deps.Idem.CheckAndMark(ctx, key, 24*time.Hour)
 	if err != nil {
-		log.Printf("hedge: idem check batch=%d: %v", batch.ID, err)
+		log.Printf("hedge: idem check batch=%s: %v", batch.ID, err)
 	}
 	if err == nil && !ok {
 		// Replay; do not double-hedge.
-		log.Printf("hedge: dup batch=%d skipped", batch.ID)
+		log.Printf("hedge: dup batch=%s skipped", batch.ID)
 		return order, nil
 	}
 	exposure := order.NotionalUSD
@@ -54,7 +54,7 @@ func (h *Hedger) OnAggregateFill(ctx context.Context, batch *store.Batch, order 
 		BatchID:      batch.ID,
 	}, key)
 	if err != nil {
-		log.Printf("hedge: submit batch=%d: %v", batch.ID, err)
+		log.Printf("hedge: submit batch=%s: %v", batch.ID, err)
 		metrics.UnhedgedExposure.WithLabelValues(fiatCurrency).Add(exposure)
 		return nil, err
 	}
@@ -68,6 +68,6 @@ func (h *Hedger) OnAggregateFill(ctx context.Context, batch *store.Batch, order 
 	}
 	unhedged := exposure - hedged
 	metrics.UnhedgedExposure.WithLabelValues(fiatCurrency).Set(unhedged)
-	log.Printf("hedge: batch=%d fiat=%s exposure=%.2f hedged=%.2f unhedged=%.2f", batch.ID, fiatCurrency, exposure, hedged, unhedged)
+	log.Printf("hedge: batch=%s fiat=%s exposure=%.2f hedged=%.2f unhedged=%.2f", batch.ID, fiatCurrency, exposure, hedged, unhedged)
 	return updated, nil
 }

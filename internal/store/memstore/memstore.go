@@ -10,18 +10,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 )
 
 // All is a composite of all in-memory stores.
 type All struct {
-	Batch     *BatchStore
+	Batch      *BatchStore
 	Membership *MembershipStore
-	Order     *AggregateOrderStore
-	Funding   *FundingStore
-	Float     *FloatStore
-	Rebalance *RebalancingStore
-	Outbox    *OutboxStore
+	Order      *AggregateOrderStore
+	Funding    *FundingStore
+	Float      *FloatStore
+	Rebalance  *RebalancingStore
+	Outbox     *OutboxStore
 }
 
 // NewAll returns a fully wired set of in-memory stores.
@@ -40,9 +42,8 @@ func NewAll() *All {
 // --- BatchStore ---
 
 type BatchStore struct {
-	mu      sync.Mutex
-	rows    []*store.Batch
-	nextID  int64
+	mu   sync.Mutex
+	rows []*store.Batch
 }
 
 func NewBatchStore() *BatchStore { return &BatchStore{} }
@@ -56,9 +57,9 @@ func (s *BatchStore) OpenBatch(_ context.Context, assetPair string) (*store.Batc
 			return &c, nil
 		}
 	}
-	s.nextID++
+	id, _ := uuid.NewV7()
 	b := &store.Batch{
-		ID:        s.nextID,
+		ID:        id,
 		AssetPair: assetPair,
 		Status:    store.BatchOpen,
 		OpenedAt:  time.Now().UTC(),
@@ -68,7 +69,7 @@ func (s *BatchStore) OpenBatch(_ context.Context, assetPair string) (*store.Batc
 	return &c, nil
 }
 
-func (s *BatchStore) GetBatch(_ context.Context, id int64) (*store.Batch, error) {
+func (s *BatchStore) GetBatch(_ context.Context, id uuid.UUID) (*store.Batch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, b := range s.rows {
@@ -108,11 +109,11 @@ func (s *BatchStore) ListOpenBatches(_ context.Context) ([]*store.Batch, error) 
 			out = append(out, &c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
 	return out, nil
 }
 
-func (s *BatchStore) UpdateBatchStatus(_ context.Context, id int64, from, to store.BatchStatus, mutator func(*store.Batch)) (*store.Batch, bool, error) {
+func (s *BatchStore) UpdateBatchStatus(_ context.Context, id uuid.UUID, from, to store.BatchStatus, mutator func(*store.Batch)) (*store.Batch, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, b := range s.rows {
@@ -137,7 +138,7 @@ func (s *BatchStore) UpdateBatchStatus(_ context.Context, id int64, from, to sto
 	return nil, false, store.ErrNotFound
 }
 
-func (s *BatchStore) SetBatchNotional(_ context.Context, id int64, notional float64) error {
+func (s *BatchStore) SetBatchNotional(_ context.Context, id uuid.UUID, notional float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, b := range s.rows {
@@ -152,10 +153,9 @@ func (s *BatchStore) SetBatchNotional(_ context.Context, id int64, notional floa
 // --- MembershipStore ---
 
 type MembershipStore struct {
-	mu     sync.Mutex
-	rows   []*store.Membership
-	nextID int64
-	byTx   map[string]bool
+	mu   sync.Mutex
+	rows []*store.Membership
+	byTx map[string]bool
 }
 
 func NewMembershipStore() *MembershipStore {
@@ -169,9 +169,9 @@ func (s *MembershipStore) AddMembership(_ context.Context, m *store.Membership) 
 		return false, nil
 	}
 	s.byTx[m.TxID] = true
-	s.nextID++
+	id, _ := uuid.NewV7()
 	c := *m
-	c.ID = s.nextID
+	c.ID = id
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now().UTC()
 	}
@@ -179,7 +179,7 @@ func (s *MembershipStore) AddMembership(_ context.Context, m *store.Membership) 
 	return true, nil
 }
 
-func (s *MembershipStore) ListMemberships(_ context.Context, batchID int64) ([]*store.Membership, error) {
+func (s *MembershipStore) ListMemberships(_ context.Context, batchID uuid.UUID) ([]*store.Membership, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*store.Membership
@@ -189,11 +189,11 @@ func (s *MembershipStore) ListMemberships(_ context.Context, batchID int64) ([]*
 			out = append(out, &c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
 	return out, nil
 }
 
-func (s *MembershipStore) SumNotional(_ context.Context, batchID int64) (float64, error) {
+func (s *MembershipStore) SumNotional(_ context.Context, batchID uuid.UUID) (float64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var sum float64
@@ -214,9 +214,8 @@ func (s *MembershipStore) ExistsByTxID(_ context.Context, txID string) (bool, er
 // --- AggregateOrderStore ---
 
 type AggregateOrderStore struct {
-	mu     sync.Mutex
-	rows   []*store.AggregateOrder
-	nextID int64
+	mu   sync.Mutex
+	rows []*store.AggregateOrder
 }
 
 func NewAggregateOrderStore() *AggregateOrderStore { return &AggregateOrderStore{} }
@@ -230,11 +229,11 @@ func (s *AggregateOrderStore) CreateOrder(_ context.Context, o *store.AggregateO
 			return &c, nil
 		}
 	}
-	s.nextID++
+	id, _ := uuid.NewV7()
 	c := *o
-	c.ID = s.nextID
+	c.ID = id
 	if c.Side == "" {
-		c.Side = "buy"
+		c.Side = "BUY"
 	}
 	if c.Status == "" {
 		c.Status = store.AggregateExecuting
@@ -246,7 +245,7 @@ func (s *AggregateOrderStore) CreateOrder(_ context.Context, o *store.AggregateO
 	return &c, nil
 }
 
-func (s *AggregateOrderStore) GetOrderByBatch(_ context.Context, batchID int64) (*store.AggregateOrder, error) {
+func (s *AggregateOrderStore) GetOrderByBatch(_ context.Context, batchID uuid.UUID) (*store.AggregateOrder, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -269,11 +268,11 @@ func (s *AggregateOrderStore) ListOrders(_ context.Context, status string) ([]*s
 		c := *r
 		out = append(out, &c)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
 	return out, nil
 }
 
-func (s *AggregateOrderStore) UpdateOrderFill(_ context.Context, batchID int64, fillPrice, totalFilled float64, venueRoutes []store.VenueRoute) (*store.AggregateOrder, error) {
+func (s *AggregateOrderStore) UpdateOrderFill(_ context.Context, batchID uuid.UUID, fillPrice, totalFilled float64, venueRoutes []store.VenueRoute) (*store.AggregateOrder, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -287,7 +286,7 @@ func (s *AggregateOrderStore) UpdateOrderFill(_ context.Context, batchID int64, 
 	return nil, store.ErrNotFound
 }
 
-func (s *AggregateOrderStore) SettleOrder(_ context.Context, batchID int64, hedgedNotional float64) (*store.AggregateOrder, error) {
+func (s *AggregateOrderStore) SettleOrder(_ context.Context, batchID uuid.UUID, hedgedNotional float64) (*store.AggregateOrder, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -304,9 +303,8 @@ func (s *AggregateOrderStore) SettleOrder(_ context.Context, batchID int64, hedg
 // --- FundingStore ---
 
 type FundingStore struct {
-	mu     sync.Mutex
-	rows   []*store.FundingRequest
-	nextID int64
+	mu   sync.Mutex
+	rows []*store.FundingRequest
 }
 
 func NewFundingStore() *FundingStore { return &FundingStore{} }
@@ -314,9 +312,9 @@ func NewFundingStore() *FundingStore { return &FundingStore{} }
 func (s *FundingStore) CreateFunding(_ context.Context, f *store.FundingRequest) (*store.FundingRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.nextID++
+	id, _ := uuid.NewV7()
 	c := *f
-	c.ID = s.nextID
+	c.ID = id
 	if c.Status == "" {
 		c.Status = store.FundingPending
 	}
@@ -327,7 +325,7 @@ func (s *FundingStore) CreateFunding(_ context.Context, f *store.FundingRequest)
 	return &c, nil
 }
 
-func (s *FundingStore) GetFunding(_ context.Context, id int64) (*store.FundingRequest, error) {
+func (s *FundingStore) GetFunding(_ context.Context, id uuid.UUID) (*store.FundingRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -338,7 +336,7 @@ func (s *FundingStore) GetFunding(_ context.Context, id int64) (*store.FundingRe
 	return nil, store.ErrNotFound
 }
 
-func (s *FundingStore) UpdateFundingStatus(_ context.Context, id int64, status store.FundingStatus) error {
+func (s *FundingStore) UpdateFundingStatus(_ context.Context, id uuid.UUID, status store.FundingStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -363,16 +361,15 @@ func (s *FundingStore) ListFunding(_ context.Context, status string) ([]*store.F
 			out = append(out, &c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
 	return out, nil
 }
 
 // --- FloatStore ---
 
 type FloatStore struct {
-	mu     sync.Mutex
-	rows   []*store.FloatPosition
-	nextID int64
+	mu   sync.Mutex
+	rows []*store.FloatPosition
 }
 
 func NewFloatStore() *FloatStore { return &FloatStore{} }
@@ -395,9 +392,9 @@ func (s *FloatStore) AddFloat(_ context.Context, p *store.FloatPosition) (*store
 			return &*r, nil
 		}
 	}
-	s.nextID++
+	id, _ := uuid.NewV7()
 	c := *p
-	c.ID = s.nextID
+	c.ID = id
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now().UTC()
 	}
@@ -474,11 +471,11 @@ func (s *FloatStore) ListMaturedFloat(_ context.Context, before time.Time) ([]*s
 			out = append(out, &c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
 	return out, nil
 }
 
-func (s *FloatStore) SettleFloat(_ context.Context, id int64) (*store.FloatPosition, error) {
+func (s *FloatStore) SettleFloat(_ context.Context, id uuid.UUID) (*store.FloatPosition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -494,9 +491,8 @@ func (s *FloatStore) SettleFloat(_ context.Context, id int64) (*store.FloatPosit
 // --- RebalancingStore ---
 
 type RebalancingStore struct {
-	mu     sync.Mutex
-	rows   []*store.RebalancingJob
-	nextID int64
+	mu   sync.Mutex
+	rows []*store.RebalancingJob
 }
 
 func NewRebalancingStore() *RebalancingStore { return &RebalancingStore{} }
@@ -504,9 +500,9 @@ func NewRebalancingStore() *RebalancingStore { return &RebalancingStore{} }
 func (s *RebalancingStore) CreateJob(_ context.Context, j *store.RebalancingJob) (*store.RebalancingJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.nextID++
+	id, _ := uuid.NewV7()
 	c := *j
-	c.ID = s.nextID
+	c.ID = id
 	if c.Status == "" {
 		c.Status = store.RebalancePending
 	}
@@ -527,11 +523,11 @@ func (s *RebalancingStore) ListJobs(_ context.Context, status string) ([]*store.
 			out = append(out, &c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
 	return out, nil
 }
 
-func (s *RebalancingStore) UpdateJobStatus(_ context.Context, id int64, status store.RebalanceStatus) error {
+func (s *RebalancingStore) UpdateJobStatus(_ context.Context, id uuid.UUID, status store.RebalanceStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -549,10 +545,9 @@ func (s *RebalancingStore) UpdateJobStatus(_ context.Context, id int64, status s
 // --- OutboxStore ---
 
 type OutboxStore struct {
-	mu     sync.Mutex
-	rows   []*store.OutboxEntry
-	seen   map[string]bool
-	nextID int64
+	mu   sync.Mutex
+	rows []*store.OutboxEntry
+	seen map[string]bool
 }
 
 func NewOutboxStore() *OutboxStore { return &OutboxStore{seen: map[string]bool{}} }
@@ -564,9 +559,9 @@ func (s *OutboxStore) Append(_ context.Context, e *store.OutboxEntry) (bool, err
 		return false, nil
 	}
 	s.seen[e.DedupKey] = true
-	s.nextID++
+	id, _ := uuid.NewV7()
 	c := *e
-	c.ID = s.nextID
+	c.ID = id
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now().UTC()
 	}
@@ -590,7 +585,7 @@ func (s *OutboxStore) ListPending(_ context.Context, limit int) ([]*store.Outbox
 	return out, nil
 }
 
-func (s *OutboxStore) MarkEmitted(_ context.Context, id int64) error {
+func (s *OutboxStore) MarkEmitted(_ context.Context, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {

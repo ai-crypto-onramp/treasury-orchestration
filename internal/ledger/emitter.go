@@ -14,6 +14,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/metrics"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
@@ -47,7 +49,7 @@ const (
 type Payload struct {
 	Aggregate    Aggregate `json:"aggregate"`
 	EventType    EventType `json:"event_type"`
-	BatchID      int64     `json:"batch_id,omitempty"`
+	BatchID      uuid.UUID `json:"batch_id,omitempty"`
 	NotionalUSD  float64   `json:"notional_usd,omitempty"`
 	Asset        string    `json:"asset,omitempty"`
 	FiatCurrency string    `json:"fiat_currency,omitempty"`
@@ -99,6 +101,7 @@ func (e *Emitter) Dispatch(ctx context.Context, limit int) (int, error) {
 		_ = json.Unmarshal(ent.Payload, &p)
 		key := ent.DedupKey
 		// Ledger posting.
+		// Ledger posting.
 		if e.deps.Ledger != nil {
 			if err := e.deps.Ledger.Post(ctx, clients.LedgerPost{
 				Aggregate:    string(p.Aggregate),
@@ -109,7 +112,7 @@ func (e *Emitter) Dispatch(ctx context.Context, limit int) (int, error) {
 				BatchID:      p.BatchID,
 			}, key); err != nil {
 				metrics.LedgerPost.WithLabelValues(string(p.Aggregate), "error").Inc()
-				log.Printf("ledger: post id=%d: %v", ent.ID, err)
+				log.Printf("ledger: post id=%s: %v", ent.ID, err)
 				continue
 			}
 			metrics.LedgerPost.WithLabelValues(string(p.Aggregate), "ok").Inc()
@@ -123,13 +126,13 @@ func (e *Emitter) Dispatch(ctx context.Context, limit int) (int, error) {
 				Detail:    p.Detail,
 			}, key); err != nil {
 				metrics.AuditEmit.WithLabelValues(string(p.Aggregate), "error").Inc()
-				log.Printf("audit: emit id=%d: %v", ent.ID, err)
+				log.Printf("audit: emit id=%s: %v", ent.ID, err)
 				continue
 			}
 			metrics.AuditEmit.WithLabelValues(string(p.Aggregate), "ok").Inc()
 		}
 		if err := e.deps.Outbox.MarkEmitted(ctx, ent.ID); err != nil {
-			log.Printf("outbox: mark emitted id=%d: %v", ent.ID, err)
+			log.Printf("outbox: mark emitted id=%s: %v", ent.ID, err)
 			continue
 		}
 		processed++
@@ -158,6 +161,6 @@ func (e *Emitter) RunDispatcherLoop(ctx context.Context, interval time.Duration)
 }
 
 // Key builds a deterministic dedup key for an event.
-func Key(agg Aggregate, evType EventType, id int64) string {
-	return fmt.Sprintf("%s.%s:%d", agg, evType, id)
+func Key(agg Aggregate, evType EventType, id uuid.UUID) string {
+	return fmt.Sprintf("%s.%s:%s", agg, evType, id)
 }

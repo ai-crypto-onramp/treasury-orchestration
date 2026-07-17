@@ -54,32 +54,32 @@ func TestApp_FullFlow(t *testing.T) {
 
 	// Wait for the consumer to persist the membership + open batch.
 	deadline := time.Now().Add(2 * time.Second)
-	var batchID int64
+	var batchID string
 	for time.Now().Before(deadline) {
 		listResp, _ := http.Get(hs.URL + "/v1/batches")
 		if listResp != nil {
 			var out struct {
 				Batches []struct {
-					ID        int64  `json:"id"`
+					ID        string `json:"id"`
 					AssetPair string `json:"asset_pair"`
 					Status    string `json:"status"`
 				} `json:"batches"`
 			}
 			_ = json.NewDecoder(listResp.Body).Decode(&out)
 			listResp.Body.Close()
-			if len(out.Batches) >= 1 && out.Batches[0].Status == "open" {
+			if len(out.Batches) >= 1 && out.Batches[0].Status == "OPEN" {
 				batchID = out.Batches[0].ID
 				break
 			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if batchID == 0 {
+	if batchID == "" {
 		t.Fatal("no open batch created")
 	}
 
 	// Manual close.
-	closeResp, err := http.Post(hs.URL+"/v1/batches/"+itoa(batchID)+"/close", "application/json", strings.NewReader("{}"))
+	closeResp, err := http.Post(hs.URL+"/v1/batches/"+batchID+"/close", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestApp_FullFlow(t *testing.T) {
 	deadline = time.Now().Add(2 * time.Second)
 	var orderStatus string
 	for time.Now().Before(deadline) {
-		getResp, _ := http.Get(hs.URL + "/v1/batches/" + itoa(batchID))
+		getResp, _ := http.Get(hs.URL + "/v1/batches/" + batchID)
 		if getResp != nil {
 			var out struct {
 				Batch struct {
@@ -161,7 +161,7 @@ func TestApp_FullFlow(t *testing.T) {
 		dupResp.Body.Close()
 	}
 	time.Sleep(100 * time.Millisecond)
-	listResp, _ := http.Get(hs.URL + "/v1/batches/" + itoa(batchID))
+	listResp, _ := http.Get(hs.URL + "/v1/batches/" + batchID)
 	var out struct {
 		Memberships []any `json:"memberships"`
 	}
@@ -172,20 +172,6 @@ func TestApp_FullFlow(t *testing.T) {
 	}
 
 	_ = eventbus.TxCompletedEvent{}
-}
-
-func itoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := [20]byte{}
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[pos:])
 }
 
 // TestBuild_DefaultsApplied exercises the defaulting branch of Build when

@@ -12,6 +12,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/metrics"
@@ -39,7 +41,7 @@ func New(deps Deps) *Executor { return &Executor{deps: deps} }
 // SubmitBatch builds and submits the parent order for a closed batch.
 // It is idempotent on batch_id: if an order already exists for the batch
 // it returns the existing record (and re-applies the fill if missing).
-func (e *Executor) SubmitBatch(ctx context.Context, batchID int64) (*store.AggregateOrder, error) {
+func (e *Executor) SubmitBatch(ctx context.Context, batchID uuid.UUID) (*store.AggregateOrder, error) {
 	batch, err := e.deps.Batches.GetBatch(ctx, batchID)
 	if err != nil {
 		return nil, err
@@ -47,14 +49,14 @@ func (e *Executor) SubmitBatch(ctx context.Context, batchID int64) (*store.Aggre
 	// If the batch has already advanced past closed (executing/settled),
 	// this is a replay: return the existing order if present.
 	if batch.Status != store.BatchClosed && batch.Status != store.BatchExecuting {
-		return nil, fmt.Errorf("aggregate: batch %d not closed (status=%s)", batchID, batch.Status)
+		return nil, fmt.Errorf("aggregate: batch %s not closed (status=%s)", batchID, batch.Status)
 	}
 	// Persist the aggregate order (status executing) before submission.
 	// CreateOrder is idempotent on batch_id.
 	order, err := e.deps.Orders.CreateOrder(ctx, &store.AggregateOrder{
 		BatchID:     batch.ID,
 		AssetPair:   batch.AssetPair,
-		Side:        "buy",
+		Side:        "BUY",
 		NotionalUSD: batch.NotionalUSD,
 		Status:      store.AggregateExecuting,
 	})
@@ -69,26 +71,26 @@ func (e *Executor) SubmitBatch(ctx context.Context, batchID int64) (*store.Aggre
 	// advanced).
 	_, _, _ = e.deps.Batches.UpdateBatchStatus(ctx, batch.ID, store.BatchClosed, store.BatchExecuting, nil)
 
-	idemKey := fmt.Sprintf("agg:%d", batch.ID)
+	idemKey := fmt.Sprintf("agg:%s", batch.ID)
 	ok, err := e.deps.Idem.CheckAndMark(ctx, idemKey, 24*time.Hour)
 	if err != nil {
-		log.Printf("aggregate: idem check batch=%d: %v", batch.ID, err)
+		log.Printf("aggregate: idem check batch=%s: %v", batch.ID, err)
 	}
 	if err == nil && !ok {
 		// Replay; re-fetch the order and return it.
-		log.Printf("aggregate: dup submit batch=%d skipped", batch.ID)
+		log.Printf("aggregate: dup submit batch=%s skipped", batch.ID)
 		return e.deps.Orders.GetOrderByBatch(ctx, batch.ID)
 	}
 
 	// Submit to liquidity-routing.
 	fill, err := e.deps.Liquidity.SubmitAggregate(ctx, clients.AggregateOrderRequest{
 		AssetPair:   batch.AssetPair,
-		Side:        "buy",
+		Side:        "BUY",
 		NotionalUSD: batch.NotionalUSD,
 		TotalTarget: batch.NotionalUSD,
 	}, idemKey)
 	if err != nil {
-		log.Printf("aggregate: submit batch=%d: %v", batch.ID, err)
+		log.Printf("aggregate: submit batch=%s: %v", batch.ID, err)
 		return nil, err
 	}
 	// Persist fill.
@@ -107,7 +109,7 @@ func (e *Executor) SubmitBatch(ctx context.Context, batchID int64) (*store.Aggre
 			metrics.SlippageUSD.WithLabelValues(batch.AssetPair).Observe((fill.FillPrice - expected) * fill.TotalFilled)
 		}
 	}
-	log.Printf("aggregate: filled batch=%d fill_price=%.4f total_filled=%.4f", batch.ID, fill.FillPrice, fill.TotalFilled)
+	log.Printf("aggregate: filled batch=%s fill_price=%.4f total_filled=%.4f", batch.ID, fill.FillPrice, fill.TotalFilled)
 	if e.deps.OnFill != nil {
 		e.deps.OnFill(ctx, batch, updated)
 	}

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store/memstore"
@@ -21,8 +23,8 @@ func newTracker(t *testing.T, cfg config.Config) (*Tracker, *memstore.FloatStore
 func TestTracker_OnAggregateFillIncrementsFloat(t *testing.T) {
 	ctx := context.Background()
 	tr, floats := newTracker(t, config.Config{SettlementDays: map[string]int{"USD": 2}})
-	batch := &store.Batch{ID: 1, AssetPair: "BTC/USD"}
-	order := &store.AggregateOrder{ID: 1, BatchID: 1, NotionalUSD: 50000, TotalFilled: 1}
+	batch := &store.Batch{ID: uuid.New(), AssetPair: "BTC/USD"}
+	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: 50000, TotalFilled: 1}
 	if err := tr.OnAggregateFill(ctx, batch, order, "USD", "BTC"); err != nil {
 		t.Fatal(err)
 	}
@@ -41,8 +43,8 @@ func TestTracker_OnAggregateFillIncrementsFloat(t *testing.T) {
 func TestTracker_SettlementDueAtIsTPlusN(t *testing.T) {
 	ctx := context.Background()
 	tr, floats := newTracker(t, config.Config{SettlementDays: map[string]int{"USD": 2, "JPY": 3}})
-	batch := &store.Batch{ID: 1, AssetPair: "BTC/JPY"}
-	order := &store.AggregateOrder{ID: 1, BatchID: 1, NotionalUSD: 1000, TotalFilled: 0.1}
+	batch := &store.Batch{ID: uuid.New(), AssetPair: "BTC/JPY"}
+	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: 1000, TotalFilled: 0.1}
 	if err := tr.OnAggregateFill(ctx, batch, order, "JPY", "BTC"); err != nil {
 		t.Fatal(err)
 	}
@@ -67,8 +69,8 @@ func TestTracker_BreachMaxTriggersAlert(t *testing.T) {
 			breaches = append(breaches, fiat+":"+bound)
 		},
 	})
-	batch := &store.Batch{ID: 1, AssetPair: "BTC/USD"}
-	order := &store.AggregateOrder{ID: 1, BatchID: 1, NotionalUSD: 200000, TotalFilled: 4}
+	batch := &store.Batch{ID: uuid.New(), AssetPair: "BTC/USD"}
+	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: 200000, TotalFilled: 4}
 	if err := tr.OnAggregateFill(ctx, batch, order, "USD", "BTC"); err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +90,8 @@ func TestTracker_BreachMinTriggersAlert(t *testing.T) {
 			breaches = append(breaches, fiat+":"+bound)
 		},
 	})
-	batch := &store.Batch{ID: 1, AssetPair: "BTC/USD"}
-	order := &store.AggregateOrder{ID: 1, BatchID: 1, NotionalUSD: 1000, TotalFilled: 0.01}
+	batch := &store.Batch{ID: uuid.New(), AssetPair: "BTC/USD"}
+	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: 1000, TotalFilled: 0.01}
 	if err := tr.OnAggregateFill(ctx, batch, order, "USD", "BTC"); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +145,7 @@ func TestTracker_Get(t *testing.T) {
 func TestTracker_OnAggregateFillAddFloatError(t *testing.T) {
 	ctx := context.Background()
 	tr := New(Deps{Cfg: config.Config{SettlementDays: map[string]int{"USD": 2}}, Floats: errFloatStore{}})
-	err := tr.OnAggregateFill(ctx, &store.Batch{ID: 1}, &store.AggregateOrder{NotionalUSD: 100, TotalFilled: 1}, "USD", "BTC")
+	err := tr.OnAggregateFill(ctx, &store.Batch{ID: uuid.New()}, &store.AggregateOrder{NotionalUSD: 100, TotalFilled: 1}, "USD", "BTC")
 	if !errors.Is(err, errFloat) {
 		t.Fatalf("err=%v want errFloat", err)
 	}
@@ -154,11 +156,11 @@ func TestTracker_OnAggregateFillOnAdjustHook(t *testing.T) {
 	all := memstore.NewAll()
 	adjusted := make(chan struct{}, 4)
 	tr := New(Deps{
-		Cfg:       config.Config{SettlementDays: map[string]int{"USD": 2}},
-		Floats:    all.Float,
-		OnAdjust:  func(context.Context, string, float64, int64) { adjusted <- struct{}{} },
+		Cfg:      config.Config{SettlementDays: map[string]int{"USD": 2}},
+		Floats:   all.Float,
+		OnAdjust: func(context.Context, string, float64, uuid.UUID) { adjusted <- struct{}{} },
 	})
-	if err := tr.OnAggregateFill(ctx, &store.Batch{ID: 1}, &store.AggregateOrder{NotionalUSD: 100, TotalFilled: 1}, "USD", "BTC"); err != nil {
+	if err := tr.OnAggregateFill(ctx, &store.Batch{ID: uuid.New()}, &store.AggregateOrder{NotionalUSD: 100, TotalFilled: 1}, "USD", "BTC"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -251,7 +253,7 @@ func (errFloatStore) ListMaturedFloat(context.Context, time.Time) ([]*store.Floa
 func (errFloatStore) ListFloat(context.Context) ([]*store.FloatPosition, error) {
 	return nil, errFloat
 }
-func (errFloatStore) SettleFloat(context.Context, int64) (*store.FloatPosition, error) {
+func (errFloatStore) SettleFloat(context.Context, uuid.UUID) (*store.FloatPosition, error) {
 	return nil, errFloat
 }
 
@@ -269,11 +271,11 @@ func (s *settleErrFloatStore) GetFloat(context.Context, string) (*store.FloatPos
 	return &store.FloatPosition{}, nil
 }
 func (s *settleErrFloatStore) ListMaturedFloat(_ context.Context, _ time.Time) ([]*store.FloatPosition, error) {
-	return []*store.FloatPosition{{ID: 1, FiatCurrency: "USD", ShortFiatAmount: 100, SettlementDueAt: time.Now().UTC().Add(-time.Hour)}}, nil
+	return []*store.FloatPosition{{ID: uuid.New(), FiatCurrency: "USD", ShortFiatAmount: 100, SettlementDueAt: time.Now().UTC().Add(-time.Hour)}}, nil
 }
 func (s *settleErrFloatStore) ListFloat(context.Context) ([]*store.FloatPosition, error) {
 	return nil, errFloat
 }
-func (s *settleErrFloatStore) SettleFloat(context.Context, int64) (*store.FloatPosition, error) {
+func (s *settleErrFloatStore) SettleFloat(context.Context, uuid.UUID) (*store.FloatPosition, error) {
 	return nil, errFloat
 }

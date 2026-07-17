@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
@@ -37,7 +39,7 @@ func TestManager_CreateFundingRequest_PersistsAndExecutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fr.Status != "completed" {
+	if fr.Status != store.FundingCompleted {
 		t.Fatalf("status=%s want completed", fr.Status)
 	}
 	calls := wallet.Calls()
@@ -48,7 +50,7 @@ func TestManager_CreateFundingRequest_PersistsAndExecutes(t *testing.T) {
 		t.Fatalf("call=%+v", calls[0])
 	}
 	got, _ := all.Funding.GetFunding(ctx, fr.ID)
-	if got.Status != "completed" {
+	if got.Status != store.FundingCompleted {
 		t.Fatalf("persisted status=%s want completed", got.Status)
 	}
 }
@@ -79,7 +81,7 @@ func TestManager_Rebalance_PersistsAndExecutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.Status != "completed" {
+	if job.Status != store.RebalanceCompleted {
 		t.Fatalf("status=%s want completed", job.Status)
 	}
 	calls := wallet.Calls()
@@ -109,11 +111,11 @@ func TestManager_ListFunding_StatusFilter(t *testing.T) {
 	if len(all) != 2 {
 		t.Fatalf("all=%d want 2", len(all))
 	}
-	completed, _ := mgr.ListFunding(ctx, "completed")
+	completed, _ := mgr.ListFunding(ctx, string(store.FundingCompleted))
 	if len(completed) != 2 {
 		t.Fatalf("completed=%d want 2", len(completed))
 	}
-	pending, _ := mgr.ListFunding(ctx, "pending")
+	pending, _ := mgr.ListFunding(ctx, string(store.FundingPending))
 	if len(pending) != 0 {
 		t.Fatalf("pending=%d want 0", len(pending))
 	}
@@ -170,7 +172,7 @@ func TestManager_CreateFundingRequest_UpdateFundingStatusError(t *testing.T) {
 func TestManager_CreateFundingRequest_OnFundingHook(t *testing.T) {
 	ctx := context.Background()
 	all := memstore.NewAll()
-	called := make(chan int64, 4)
+	called := make(chan uuid.UUID, 4)
 	mgr := New(Deps{
 		Cfg:     config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
 		Funding: all.Funding,
@@ -183,8 +185,8 @@ func TestManager_CreateFundingRequest_OnFundingHook(t *testing.T) {
 	}
 	select {
 	case id := <-called:
-		if id <= 0 {
-			t.Fatalf("expected positive funding id, got %d", id)
+		if id == uuid.Nil {
+			t.Fatalf("expected non-nil funding id, got %s", id)
 		}
 	default:
 		t.Fatal("expected OnFunding to fire")
@@ -264,7 +266,7 @@ func TestManager_Rebalance_WalletErrorReturnsErr(t *testing.T) {
 func TestManager_Rebalance_OnRebalanceHook(t *testing.T) {
 	ctx := context.Background()
 	all := memstore.NewAll()
-	called := make(chan int64, 4)
+	called := make(chan uuid.UUID, 4)
 	mgr := New(Deps{
 		Cfg:       config.Config{HotWalletTargets: map[string]float64{"BTC": 10}},
 		Rebalance: all.Rebalance,
@@ -277,8 +279,8 @@ func TestManager_Rebalance_OnRebalanceHook(t *testing.T) {
 	}
 	select {
 	case id := <-called:
-		if id <= 0 {
-			t.Fatalf("expected positive job id, got %d", id)
+		if id == uuid.Nil {
+			t.Fatalf("expected non-nil job id, got %s", id)
 		}
 	default:
 		t.Fatal("expected OnRebalance to fire")
@@ -393,13 +395,13 @@ func (errFundingStore) CreateFunding(_ context.Context, f *store.FundingRequest)
 	// Return a cloned row with an ID so the manager proceeds, then fail on
 	// UpdateFundingStatus.
 	c := *f
-	c.ID = 1
+	c.ID = uuid.New()
 	return &c, nil
 }
-func (errFundingStore) GetFunding(context.Context, int64) (*store.FundingRequest, error) {
+func (errFundingStore) GetFunding(context.Context, uuid.UUID) (*store.FundingRequest, error) {
 	return nil, errFundingErr
 }
-func (errFundingStore) UpdateFundingStatus(context.Context, int64, store.FundingStatus) error {
+func (errFundingStore) UpdateFundingStatus(context.Context, uuid.UUID, store.FundingStatus) error {
 	return errFundingErr
 }
 func (errFundingStore) ListFunding(context.Context, string) ([]*store.FundingRequest, error) {
@@ -417,11 +419,11 @@ type errRebalStore struct{}
 
 func (errRebalStore) CreateJob(_ context.Context, j *store.RebalancingJob) (*store.RebalancingJob, error) {
 	c := *j
-	c.ID = 1
+	c.ID = uuid.New()
 	return &c, nil
 }
 func (errRebalStore) ListJobs(context.Context, string) ([]*store.RebalancingJob, error) { return nil, nil }
-func (errRebalStore) UpdateJobStatus(context.Context, int64, store.RebalanceStatus) error {
+func (errRebalStore) UpdateJobStatus(context.Context, uuid.UUID, store.RebalanceStatus) error {
 	return errRebalErr
 }
 
@@ -432,7 +434,7 @@ func (errCreateJobStore) CreateJob(context.Context, *store.RebalancingJob) (*sto
 	return nil, errRebalErr
 }
 func (errCreateJobStore) ListJobs(context.Context, string) ([]*store.RebalancingJob, error) { return nil, nil }
-func (errCreateJobStore) UpdateJobStatus(context.Context, int64, store.RebalanceStatus) error {
+func (errCreateJobStore) UpdateJobStatus(context.Context, uuid.UUID, store.RebalanceStatus) error {
 	return nil
 }
 

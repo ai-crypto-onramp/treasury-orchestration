@@ -12,6 +12,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/metrics"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
@@ -25,7 +27,7 @@ type Deps struct {
 	// OnAdjust is called after a float position is incremented by an
 	// aggregate fill, so the caller can append a ledger/audit outbox
 	// event.
-	OnAdjust func(ctx context.Context, fiat string, amount float64, batchID int64)
+	OnAdjust func(ctx context.Context, fiat string, amount float64, batchID uuid.UUID)
 }
 
 // Tracker manages float positions.
@@ -107,10 +109,10 @@ func (t *Tracker) SweepMatured(ctx context.Context) (int, error) {
 	swept := 0
 	for _, p := range matured {
 		if _, err := t.deps.Floats.SettleFloat(ctx, p.ID); err != nil {
-			log.Printf("float: settle id=%d: %v", p.ID, err)
+			log.Printf("float: settle id=%s: %v", p.ID, err)
 			continue
 		}
-		log.Printf("float: swept id=%d fiat=%s amount=%.2f due=%s", p.ID, p.FiatCurrency, p.ShortFiatAmount, p.SettlementDueAt.Format(time.RFC3339))
+		log.Printf("float: swept id=%s fiat=%s amount=%.2f due=%s", p.ID, p.FiatCurrency, p.ShortFiatAmount, p.SettlementDueAt.Format(time.RFC3339))
 		swept++
 	}
 	if swept > 0 {

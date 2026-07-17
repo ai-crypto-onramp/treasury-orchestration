@@ -155,7 +155,7 @@ func (c *Consumer) handle(ctx context.Context, ev eventbus.TxCompletedEvent) {
 	// checks.
 	sum, _ := c.Deps.Memberships.SumNotional(ctx, batch.ID)
 	_ = c.Deps.Batches.SetBatchNotional(ctx, batch.ID, sum)
-	log.Printf("consumer: added tx=%s pair=%s batch=%d notional=%.2f", ev.TxID, assetPair, batch.ID, sum)
+	log.Printf("consumer: added tx=%s pair=%s batch=%s notional=%.2f", ev.TxID, assetPair, batch.ID, sum)
 	metrics.EventsConsumed.WithLabelValues(assetPair, "ok").Inc()
 }
 

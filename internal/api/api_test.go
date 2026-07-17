@@ -7,9 +7,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/batch"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
@@ -103,7 +106,7 @@ func TestBatchByID_GetWithMemberships(t *testing.T) {
 	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", Asset: "BTC", FiatCurrency: "USD", NotionalUSD: 1000})
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/v1/batches/" + itoa(b.ID))
+	resp, err := http.Get(srv.URL + "/v1/batches/" + b.ID.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +131,7 @@ func TestBatchByID_NotFound(t *testing.T) {
 	d, _, _ := newDeps(t)
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/v1/batches/9999")
+	resp, err := http.Get(srv.URL + "/v1/batches/" + uuid.New().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +146,7 @@ func TestBatchByID_Close(t *testing.T) {
 	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/v1/batches/"+itoa(b.ID)+"/close", "application/json", strings.NewReader("{}"))
+	resp, err := http.Post(srv.URL+"/v1/batches/"+b.ID.String()+"/close", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +219,7 @@ func TestFunding_List(t *testing.T) {
 	_, _ = d.Funding.CreateFundingRequest(ctx, "h2", "ETH", 2, "")
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/v1/funding-requests?status=completed")
+	resp, err := http.Get(srv.URL + "/v1/funding-requests?status=" + string(store.FundingCompleted))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,30 +269,6 @@ func TestFunding_MethodNotAllowed(t *testing.T) {
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("code=%d want 405", resp.StatusCode)
 	}
-}
-
-// itoa avoids strconv for small ids in test helpers.
-func itoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	buf := [20]byte{}
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
 }
 
 // --- additional coverage ---
@@ -358,7 +337,7 @@ func TestBatchByID_CloseMethodNotAllowed(t *testing.T) {
 	b, _ := all.Batch.OpenBatch(context.Background(), "BTC/USD")
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/batches/"+itoa(b.ID)+"/close", nil)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/batches/"+b.ID.String()+"/close", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +354,7 @@ func TestBatchByID_CloseSchedulerNil(t *testing.T) {
 	d.Scheduler = nil
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/v1/batches/"+itoa(b.ID)+"/close", "application/json", strings.NewReader("{}"))
+	resp, err := http.Post(srv.URL+"/v1/batches/"+b.ID.String()+"/close", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +373,7 @@ func TestBatchByID_CloseAlreadyClosedConflict(t *testing.T) {
 	}
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/v1/batches/"+itoa(b.ID)+"/close", "application/json", strings.NewReader("{}"))
+	resp, err := http.Post(srv.URL+"/v1/batches/"+b.ID.String()+"/close", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +387,7 @@ func TestBatchByID_CloseNotFound(t *testing.T) {
 	d, _, _ := newDeps(t)
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/v1/batches/9999/close", "application/json", strings.NewReader("{}"))
+	resp, err := http.Post(srv.URL+"/v1/batches/"+uuid.New().String()+"/close", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +402,7 @@ func TestBatchByID_GetInternalError(t *testing.T) {
 	d.Batches = errBatchStore{err: errAPI}
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/v1/batches/1")
+	resp, err := http.Get(srv.URL + "/v1/batches/" + uuid.New().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +420,7 @@ func TestBatchByID_GetWithoutOrdersOrMembers(t *testing.T) {
 	d.Members = nil
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/v1/batches/" + itoa(b.ID))
+	resp, err := http.Get(srv.URL + "/v1/batches/" + b.ID.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +478,7 @@ func TestFunding_PolicyViolation(t *testing.T) {
 	d, _, _ := newDeps(t)
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	body := `{"wallet_id":"h","asset":"BTC","amount":` + itoa(int64(11_000_000)) + `}`
+	body := `{"wallet_id":"h","asset":"BTC","amount":` + strconv.FormatInt(11_000_000, 10) + `}`
 	resp, err := http.Post(srv.URL+"/v1/funding-requests", "application/json", bytes.NewReader([]byte(body)))
 	if err != nil {
 		t.Fatal(err)
@@ -585,7 +564,7 @@ func TestBatchMemberships(t *testing.T) {
 	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", Asset: "BTC", FiatCurrency: "USD", NotionalUSD: 1000})
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/v1/batches/" + itoa(b.ID) + "/memberships")
+	resp, err := http.Get(srv.URL + "/v1/batches/" + b.ID.String() + "/memberships")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,8 +606,10 @@ func TestFloatList(t *testing.T) {
 func TestAggregateOrdersList(t *testing.T) {
 	ctx := context.Background()
 	d, all, _ := newDeps(t)
-	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: 1, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
-	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: 2, AssetPair: "ETH/USD", NotionalUSD: 30000, Status: store.AggregateSettled})
+	batchID1, _ := uuid.NewV7()
+	batchID2, _ := uuid.NewV7()
+	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: batchID1, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
+	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: batchID2, AssetPair: "ETH/USD", NotionalUSD: 30000, Status: store.AggregateSettled})
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/aggregate-orders")
@@ -645,7 +626,7 @@ func TestAggregateOrdersList(t *testing.T) {
 	if len(out.AggregateOrders) != 2 {
 		t.Fatalf("orders=%d want 2", len(out.AggregateOrders))
 	}
-	resp2, err := http.Get(srv.URL + "/v1/aggregate-orders?status=settled")
+	resp2, err := http.Get(srv.URL + "/v1/aggregate-orders?status=" + string(store.AggregateSettled))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,27 +644,27 @@ type errBatchStore struct{ err error }
 func (e errBatchStore) OpenBatch(context.Context, string) (*store.Batch, error) {
 	return nil, e.err
 }
-func (e errBatchStore) GetBatch(context.Context, int64) (*store.Batch, error) { return nil, e.err }
+func (e errBatchStore) GetBatch(context.Context, uuid.UUID) (*store.Batch, error) { return nil, e.err }
 func (e errBatchStore) ListBatches(context.Context, time.Time, time.Time) ([]*store.Batch, error) {
 	return nil, e.err
 }
 func (e errBatchStore) ListOpenBatches(context.Context) ([]*store.Batch, error) {
 	return nil, e.err
 }
-func (e errBatchStore) UpdateBatchStatus(context.Context, int64, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
+func (e errBatchStore) UpdateBatchStatus(context.Context, uuid.UUID, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
 	return nil, false, e.err
 }
-func (e errBatchStore) SetBatchNotional(context.Context, int64, float64) error { return e.err }
+func (e errBatchStore) SetBatchNotional(context.Context, uuid.UUID, float64) error { return e.err }
 
 type errFundingStore struct{ err error }
 
 func (e errFundingStore) CreateFunding(context.Context, *store.FundingRequest) (*store.FundingRequest, error) {
 	return nil, e.err
 }
-func (e errFundingStore) GetFunding(context.Context, int64) (*store.FundingRequest, error) {
+func (e errFundingStore) GetFunding(context.Context, uuid.UUID) (*store.FundingRequest, error) {
 	return nil, e.err
 }
-func (e errFundingStore) UpdateFundingStatus(context.Context, int64, store.FundingStatus) error {
+func (e errFundingStore) UpdateFundingStatus(context.Context, uuid.UUID, store.FundingStatus) error {
 	return e.err
 }
 func (e errFundingStore) ListFunding(context.Context, string) ([]*store.FundingRequest, error) {
@@ -698,6 +679,6 @@ func (e errRebalStore) CreateJob(context.Context, *store.RebalancingJob) (*store
 func (e errRebalStore) ListJobs(context.Context, string) ([]*store.RebalancingJob, error) {
 	return nil, e.err
 }
-func (e errRebalStore) UpdateJobStatus(context.Context, int64, store.RebalanceStatus) error {
+func (e errRebalStore) UpdateJobStatus(context.Context, uuid.UUID, store.RebalanceStatus) error {
 	return e.err
 }

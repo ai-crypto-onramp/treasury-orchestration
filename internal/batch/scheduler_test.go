@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
@@ -129,7 +131,7 @@ type errBatchStore struct{ err error }
 func (e errBatchStore) OpenBatch(context.Context, string) (*store.Batch, error) {
 	return nil, e.err
 }
-func (e errBatchStore) GetBatch(context.Context, int64) (*store.Batch, error) {
+func (e errBatchStore) GetBatch(context.Context, uuid.UUID) (*store.Batch, error) {
 	return nil, e.err
 }
 func (e errBatchStore) ListBatches(context.Context, time.Time, time.Time) ([]*store.Batch, error) {
@@ -138,19 +140,19 @@ func (e errBatchStore) ListBatches(context.Context, time.Time, time.Time) ([]*st
 func (e errBatchStore) ListOpenBatches(context.Context) ([]*store.Batch, error) {
 	return nil, e.err
 }
-func (e errBatchStore) UpdateBatchStatus(context.Context, int64, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
+func (e errBatchStore) UpdateBatchStatus(context.Context, uuid.UUID, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
 	return nil, false, e.err
 }
-func (e errBatchStore) SetBatchNotional(context.Context, int64, float64) error { return e.err }
+func (e errBatchStore) SetBatchNotional(context.Context, uuid.UUID, float64) error { return e.err }
 
 type noOpMembership struct{}
 
 func (noOpMembership) AddMembership(context.Context, *store.Membership) (bool, error) { return true, nil }
-func (noOpMembership) ListMemberships(context.Context, int64) ([]*store.Membership, error) {
+func (noOpMembership) ListMemberships(context.Context, uuid.UUID) ([]*store.Membership, error) {
 	return nil, nil
 }
-func (noOpMembership) SumNotional(context.Context, int64) (float64, error) { return 0, nil }
-func (noOpMembership) ExistsByTxID(context.Context, string) (bool, error)   { return false, nil }
+func (noOpMembership) SumNotional(context.Context, uuid.UUID) (float64, error) { return 0, nil }
+func (noOpMembership) ExistsByTxID(context.Context, string) (bool, error)     { return false, nil }
 
 func TestScheduler_TickListErrorReturns(t *testing.T) {
 	ctx := context.Background()
@@ -174,7 +176,7 @@ func TestScheduler_TickCloseBatchGetError(t *testing.T) {
 		Memberships: noOpMembership{},
 		Lock:        idempotency.NewCadenceLock(idempotency.NewMem(), time.Minute),
 	})
-	if _, err := s.CloseBatch(ctx, 1); err != errStore {
+	if _, err := s.CloseBatch(ctx, uuid.New()); err != errStore {
 		t.Fatalf("expected errStore, got %v", err)
 	}
 }
@@ -261,7 +263,7 @@ func TestScheduler_CloseBatchUnknownID(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Config{BatchIntervalSeconds: 3600, BatchSizeThresholdUSD: 100000}
 	s, _, _ := newSchedulerDeps(t, cfg)
-	if _, err := s.CloseBatch(ctx, 999); err != store.ErrNotFound {
+	if _, err := s.CloseBatch(ctx, uuid.New()); err != store.ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }

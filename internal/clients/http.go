@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // postJSON performs a POST with JSON body and an Idempotency-Key header,
@@ -69,9 +71,9 @@ func (h *httpLiquidity) SubmitAggregate(ctx context.Context, req AggregateOrderR
 
 // HedgeRequest is the FX exposure payload forwarded to fx-hedging.
 type HedgeRequest struct {
-	FiatCurrency string  `json:"fiat_currency"`
-	NotionalUSD  float64 `json:"notional_usd"`
-	BatchID      int64   `json:"batch_id"`
+	FiatCurrency string    `json:"fiat_currency"`
+	NotionalUSD  float64   `json:"notional_usd"`
+	BatchID      uuid.UUID `json:"batch_id"`
 }
 
 // HedgeResult is the fx-hedging response.
@@ -222,12 +224,12 @@ func (f *FakeWallet) Calls() []FundingMoveRequest {
 
 // LedgerPost is one ledger posting.
 type LedgerPost struct {
-	Aggregate     string  `json:"aggregate"`
-	EventType     string  `json:"event_type"`
-	NotionalUSD   float64 `json:"notional_usd"`
-	Asset         string  `json:"asset"`
-	FiatCurrency  string  `json:"fiat_currency"`
-	BatchID       int64   `json:"batch_id,omitempty"`
+	Aggregate    string    `json:"aggregate"`
+	EventType    string    `json:"event_type"`
+	NotionalUSD  float64   `json:"notional_usd"`
+	Asset        string    `json:"asset"`
+	FiatCurrency string    `json:"fiat_currency"`
+	BatchID      uuid.UUID `json:"batch_id,omitempty"`
 }
 
 // LedgerAccounting is the client interface for ledger-accounting.
@@ -323,11 +325,11 @@ func (f *FakeLedger) Calls() []LedgerPost {
 
 // AuditEvent is one append-only audit record.
 type AuditEvent struct {
-	Aggregate string `json:"aggregate"`
-	EventType string `json:"event_type"`
-	Actor     string `json:"actor"`
-	BatchID   int64  `json:"batch_id,omitempty"`
-	Detail    string `json:"detail,omitempty"`
+	Aggregate string    `json:"aggregate"`
+	EventType string    `json:"event_type"`
+	Actor     string    `json:"actor"`
+	BatchID   uuid.UUID `json:"batch_id,omitempty"`
+	Detail    string    `json:"detail,omitempty"`
 }
 
 // AuditLog is the client interface for audit-event-log.

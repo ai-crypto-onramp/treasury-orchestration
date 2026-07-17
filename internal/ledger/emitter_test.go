@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store/memstore"
@@ -18,7 +20,7 @@ func TestEmitter_AppendAndDispatch(t *testing.T) {
 	auditCli := clients.NewFakeAudit()
 	e := New(Deps{Outbox: all.Outbox, Ledger: ledgerCli, Audit: auditCli})
 
-	if err := e.Append(ctx, AggBatch, EvBatchClose, "batch.close:1", Payload{BatchID: 1, NotionalUSD: 50000}); err != nil {
+	if err := e.Append(ctx, AggBatch, EvBatchClose, "batch.close:1", Payload{BatchID: uuid.New(), NotionalUSD: 50000}); err != nil {
 		t.Fatal(err)
 	}
 	n, err := e.Dispatch(ctx, 10)
@@ -53,11 +55,11 @@ func TestEmitter_DedupByKey(t *testing.T) {
 	ctx := context.Background()
 	all := memstore.NewAll()
 	e := New(Deps{Outbox: all.Outbox, Ledger: clients.NewFakeLedger(), Audit: clients.NewFakeAudit()})
-	if err := e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: 1}); err != nil {
+	if err := e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: uuid.New()}); err != nil {
 		t.Fatal(err)
 	}
 	// Same dedup key -> outbox Append returns false, no new entry.
-	if err := e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: 1}); err != nil {
+	if err := e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: uuid.New()}); err != nil {
 		t.Fatal(err)
 	}
 	snap := all.Outbox.Snapshot()
@@ -72,7 +74,7 @@ func TestEmitter_DispatchRetriesOnLedgerError(t *testing.T) {
 	ledgerCli := clients.NewFakeLedger()
 	ledgerCli.SetError(clients.ErrUnavailable)
 	e := New(Deps{Outbox: all.Outbox, Ledger: ledgerCli, Audit: clients.NewFakeAudit()})
-	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: 1})
+	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: uuid.New()})
 	n, _ := e.Dispatch(ctx, 10)
 	if n != 0 {
 		t.Fatalf("dispatched=%d want 0 (ledger failed)", n)
@@ -91,8 +93,9 @@ func TestEmitter_DispatchRetriesOnLedgerError(t *testing.T) {
 }
 
 func TestEmitter_Key(t *testing.T) {
-	if got := Key(AggBatch, EvBatchClose, 42); got != "batch.batch.close:42" {
-		t.Fatalf("key=%q want batch.batch.close:42", got)
+	id := uuid.MustParse("00000000-0000-0000-0000-00000000002a")
+	if got := Key(AggBatch, EvBatchClose, id); got != "batch.batch.close:00000000-0000-0000-0000-00000000002a" {
+		t.Fatalf("key=%q want batch.batch.close:00000000-0000-0000-0000-00000000002a", got)
 	}
 }
 
@@ -104,7 +107,7 @@ func TestEmitter_DispatchAuditErrorKeepsPending(t *testing.T) {
 	audit := clients.NewFakeAudit()
 	audit.SetError(clients.ErrUnavailable)
 	e := New(Deps{Outbox: all.Outbox, Ledger: clients.NewFakeLedger(), Audit: audit})
-	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: 1})
+	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: uuid.New()})
 	n, _ := e.Dispatch(ctx, 10)
 	if n != 0 {
 		t.Fatalf("dispatched=%d want 0 (audit failed)", n)
@@ -120,7 +123,7 @@ func TestEmitter_DispatchNilClientsSkipsPosting(t *testing.T) {
 	all := memstore.NewAll()
 	// No Ledger, no Audit configured.
 	e := New(Deps{Outbox: all.Outbox})
-	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: 1})
+	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: uuid.New()})
 	n, err := e.Dispatch(ctx, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +155,7 @@ func TestEmitter_DispatchMarkEmittedError(t *testing.T) {
 		Outbox: &markErrOutbox{},
 		Ledger: clients.NewFakeLedger(),
 	})
-	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: 1})
+	_ = e.Append(ctx, AggBatch, EvBatchClose, "k1", Payload{BatchID: uuid.New()})
 	n, _ := e.Dispatch(ctx, 10)
 	if n != 0 {
 		t.Fatalf("dispatched=%d want 0 (mark emitted failed)", n)
@@ -177,7 +180,7 @@ func TestEmitter_RunDispatcherLoopDispatches(t *testing.T) {
 	ledgerCli := clients.NewFakeLedger()
 	auditCli := clients.NewFakeAudit()
 	e := New(Deps{Outbox: all.Outbox, Ledger: ledgerCli, Audit: auditCli})
-	_ = e.Append(context.Background(), AggBatch, EvBatchClose, "k1", Payload{BatchID: 1})
+	_ = e.Append(context.Background(), AggBatch, EvBatchClose, "k1", Payload{BatchID: uuid.New()})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -207,7 +210,7 @@ func TestEmitter_AppendOverwritesAggregateAndEventType(t *testing.T) {
 	e := New(Deps{Outbox: all.Outbox, Ledger: clients.NewFakeLedger(), Audit: clients.NewFakeAudit()})
 	// Pass a Payload with conflicting Aggregate/EventType; Append should
 	// overwrite them with the explicit args.
-	_ = e.Append(ctx, AggFunding, EvFunding, "k1", Payload{Aggregate: AggBatch, EventType: EvBatchOpen, BatchID: 1})
+	_ = e.Append(ctx, AggFunding, EvFunding, "k1", Payload{Aggregate: AggBatch, EventType: EvBatchOpen, BatchID: uuid.New()})
 	n, _ := e.Dispatch(ctx, 10)
 	if n != 1 {
 		t.Fatalf("dispatched=%d want 1", n)
@@ -224,7 +227,7 @@ func (errOutboxStore) Append(context.Context, *store.OutboxEntry) (bool, error) 
 func (errOutboxStore) ListPending(context.Context, int) ([]*store.OutboxEntry, error) {
 	return nil, errOutbox
 }
-func (errOutboxStore) MarkEmitted(context.Context, int64) error { return errOutbox }
+func (errOutboxStore) MarkEmitted(context.Context, uuid.UUID) error { return errOutbox }
 
 // markErrOutbox succeeds for Append/ListPending but errors on MarkEmitted.
 type markErrOutbox struct {
@@ -238,4 +241,4 @@ func (m *markErrOutbox) Append(_ context.Context, e *store.OutboxEntry) (bool, e
 func (m *markErrOutbox) ListPending(_ context.Context, _ int) ([]*store.OutboxEntry, error) {
 	return m.rows, nil
 }
-func (m *markErrOutbox) MarkEmitted(context.Context, int64) error { return errOutbox }
+func (m *markErrOutbox) MarkEmitted(context.Context, uuid.UUID) error { return errOutbox }

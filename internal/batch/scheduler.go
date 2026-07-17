@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/metrics"
@@ -27,7 +29,7 @@ type CloseReason string
 const (
 	ReasonTime   CloseReason = "time"
 	ReasonSize   CloseReason = "size"
-	ReasonManual CloseReason = "manual"
+	ReasonManual CloseReason = "MANUAL"
 )
 
 // Deps bundles the scheduler dependencies.
@@ -99,7 +101,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 			continue
 		}
 		if _, err := s.close(ctx, b.ID, reason); err != nil {
-			log.Printf("scheduler: close batch=%d: %v", b.ID, err)
+			log.Printf("scheduler: close batch=%s: %v", b.ID, err)
 		}
 	}
 }
@@ -121,11 +123,11 @@ func (s *Scheduler) shouldClose(ctx context.Context, b *store.Batch) CloseReason
 
 // CloseBatch forces a manual close of an open batch regardless of
 // thresholds. Returns ErrNotOpen if the batch is not open.
-func (s *Scheduler) CloseBatch(ctx context.Context, id int64) (*store.Batch, error) {
+func (s *Scheduler) CloseBatch(ctx context.Context, id uuid.UUID) (*store.Batch, error) {
 	return s.close(ctx, id, ReasonManual)
 }
 
-func (s *Scheduler) close(ctx context.Context, id int64, reason CloseReason) (*store.Batch, error) {
+func (s *Scheduler) close(ctx context.Context, id uuid.UUID, reason CloseReason) (*store.Batch, error) {
 	b, err := s.deps.Batches.GetBatch(ctx, id)
 	if err != nil {
 		return nil, err
@@ -145,7 +147,7 @@ func (s *Scheduler) close(ctx context.Context, id int64, reason CloseReason) (*s
 	}
 	metrics.BatchesClosed.WithLabelValues(b.AssetPair, string(reason)).Inc()
 	metrics.CloseLatency.WithLabelValues(b.AssetPair).Observe(time.Since(updated.OpenedAt).Seconds())
-	log.Printf("scheduler: closed batch=%d pair=%s reason=%s notional=%.2f", id, b.AssetPair, reason, sum)
+	log.Printf("scheduler: closed batch=%s pair=%s reason=%s notional=%.2f", id, b.AssetPair, reason, sum)
 	if s.deps.OnClose != nil {
 		s.deps.OnClose(ctx, updated, reason)
 	}
