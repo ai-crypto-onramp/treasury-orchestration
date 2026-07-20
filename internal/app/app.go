@@ -123,71 +123,12 @@ func Build(cfg config.Config) (*Server, error) {
 	}
 	cadence := idempotency.NewCadenceLock(idem, time.Duration(cfg.BatchIntervalSeconds)*time.Second)
 
-	var liquidity clients.LiquidityRouting
-	if cfg.LiquidityRoutingURL != "" {
-		liquidity = clients.NewResilientLiquidity(
-			clients.NewHTTPLiquidity(cfg.LiquidityRoutingURL),
-			clients.DefaultRetry(),
-			clients.DefaultCircuitBreaker(),
-		)
-	} else {
-		if !devMode {
-			return nil, errors.New("LIQUIDITY_ROUTING_URL not set and DEV_MODE!=1; refusing to start in production mode")
-		}
-		liquidity = clients.NewFakeLiquidity(clients.FillResult{FillPrice: 50000, TotalFilled: 1})
-	}
-	var fx clients.FXHedging
-	if cfg.FXHedgingURL != "" {
-		fx = clients.NewResilientFX(
-			clients.NewHTTPFX(cfg.FXHedgingURL),
-			clients.DefaultRetry(),
-			clients.DefaultCircuitBreaker(),
-		)
-	} else {
-		if !devMode {
-			return nil, errors.New("FX_HEDGING_URL not set and DEV_MODE!=1; refusing to start in production mode")
-		}
-		fx = clients.NewFakeFX(clients.HedgeResult{HedgedNotional: 0})
-	}
-	var wallet clients.WalletManagement
-	if cfg.WalletMgmtURL != "" {
-		wallet = clients.NewHTTPWallet(cfg.WalletMgmtURL)
-	} else {
-		if !devMode {
-			return nil, errors.New("WALLET_MGMT_URL not set and DEV_MODE!=1; refusing to start in production mode")
-		}
-		wallet = clients.NewFakeWallet(clients.FundingMoveResult{Completed: true, TxID: "stub"})
-	}
-	var ledgerCli clients.LedgerAccounting
-	if cfg.LedgerURL != "" {
-		ledgerCli = clients.NewHTTPLedger(cfg.LedgerURL)
-	} else {
-		if !devMode {
-			return nil, errors.New("LEDGER_URL not set and DEV_MODE!=1; refusing to start in production mode")
-		}
-		ledgerCli = clients.NewFakeLedger()
-	}
-	var auditCli clients.AuditLog
-	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
-		kc, err := clients.NewKafkaAudit(splitCSV(brokers))
-		if err != nil {
-			if devMode {
-				log.Printf("warn: audit kafka init failed (DEV_MODE): %v; using fake audit", err)
-				auditCli = clients.NewFakeAudit()
-			} else {
-				return nil, fmt.Errorf("audit kafka init: %w", err)
-			}
-		} else {
-			auditCli = kc
-		}
-	} else if devMode {
-		log.Printf("warn: KAFKA_BROKERS unset and DEV_MODE=1; audit events recorded in-memory only")
-		auditCli = clients.NewFakeAudit()
-	} else {
-		return nil, errors.New("KAFKA_BROKERS unset and DEV_MODE!=1; refusing to start in production mode")
+	clients_, err := buildDownstreamClients(cfg, devMode)
+	if err != nil {
+		return nil, err
 	}
 
-	emitter := ledger.New(ledger.Deps{Outbox: outboxStore, Ledger: ledgerCli, Audit: auditCli})
+	emitter := ledger.New(ledger.Deps{Outbox: outboxStore, Ledger: clients_.ledger, Audit: clients_.audit})
 
 	proj := projection.New(5 * time.Minute)
 
@@ -203,12 +144,12 @@ func Build(cfg config.Config) (*Server, error) {
 		},
 	})
 
-	hedger := hedge.New(hedge.Deps{FX: fx, Orders: orderStore, Idem: idem})
+	hedger := hedge.New(hedge.Deps{FX: clients_.fx, Orders: orderStore, Idem: idem})
 
 	executor := aggregate.New(aggregate.Deps{
 		Batches:          batchStore,
 		Orders:           orderStore,
-		Liquidity:        liquidity,
+		Liquidity:        clients_.liquidity,
 		Idem:             idem,
 		ExpectedPriceFor: func(assetPair string) float64 { return 50000 },
 		OnFill: func(ctx context.Context, b *store.Batch, o *store.AggregateOrder) {
@@ -216,7 +157,6 @@ func Build(cfg config.Config) (*Server, error) {
 			cryptoAsset := cryptoOf(b.AssetPair)
 			_ = floatTracker.OnAggregateFill(ctx, b, o, fiat, cryptoAsset)
 			_, _ = hedger.OnAggregateFill(ctx, b, o, fiat)
-			// Transition batch executing -> settled to mirror lifecycle.
 			_, _, _ = batchStore.UpdateBatchStatus(ctx, b.ID, store.BatchExecuting, store.BatchSettled, nil)
 			_ = emitter.Append(ctx, ledger.AggAggregate, ledger.EvAggregateExec, ledger.Key(ledger.AggAggregate, ledger.EvAggregateExec, b.ID), ledger.Payload{
 				BatchID:      b.ID,
@@ -237,7 +177,6 @@ func Build(cfg config.Config) (*Server, error) {
 				BatchID:     b.ID,
 				NotionalUSD: b.NotionalUSD,
 			})
-			// Submit the aggregate parent order on close.
 			_, _ = executor.SubmitBatch(ctx, b.ID)
 		},
 	})
@@ -246,7 +185,7 @@ func Build(cfg config.Config) (*Server, error) {
 		Cfg:        cfg,
 		Funding:    fundingStore,
 		Rebalance:  rebalStore,
-		Wallet:     wallet,
+		Wallet:     clients_.wallet,
 		Idem:       idem,
 		Projection: proj,
 		OnFunding: func(ctx context.Context, fr *store.FundingRequest) {
@@ -265,8 +204,6 @@ func Build(cfg config.Config) (*Server, error) {
 
 	httpPush := eventbus.NewHTTPPush()
 	subscriber := eventbus.EventSubscriber(httpPush)
-	// When EVENT_BUS_URL is set (kafka://...), consume tx.completed events
-	// from Kafka instead of the in-memory HTTP-push bus.
 	if cfg.EventBusURL != "" {
 		if ks, err := eventbus.NewKafkaSubscriberFromURL(cfg.EventBusURL, cfg.EventBusGroupID); err == nil {
 			subscriber = ks
@@ -406,4 +343,109 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+type downstreamClients struct {
+	liquidity clients.LiquidityRouting
+	fx        clients.FXHedging
+	wallet    clients.WalletManagement
+	ledger    clients.LedgerAccounting
+	audit     clients.AuditLog
+}
+
+func buildDownstreamClients(cfg config.Config, devMode bool) (downstreamClients, error) {
+	var dc downstreamClients
+	liq, err := buildLiquidity(cfg, devMode)
+	if err != nil {
+		return dc, err
+	}
+	dc.liquidity = liq
+	fx, err := buildFX(cfg, devMode)
+	if err != nil {
+		return dc, err
+	}
+	dc.fx = fx
+	w, err := buildWallet(cfg, devMode)
+	if err != nil {
+		return dc, err
+	}
+	dc.wallet = w
+	lg, err := buildLedger(cfg, devMode)
+	if err != nil {
+		return dc, err
+	}
+	dc.ledger = lg
+	au, err := buildAudit(devMode)
+	if err != nil {
+		return dc, err
+	}
+	dc.audit = au
+	return dc, nil
+}
+
+func buildLiquidity(cfg config.Config, devMode bool) (clients.LiquidityRouting, error) {
+	if cfg.LiquidityRoutingURL != "" {
+		return clients.NewResilientLiquidity(
+			clients.NewHTTPLiquidity(cfg.LiquidityRoutingURL),
+			clients.DefaultRetry(),
+			clients.DefaultCircuitBreaker(),
+		), nil
+	}
+	if !devMode {
+		return nil, errors.New("LIQUIDITY_ROUTING_URL not set and DEV_MODE!=1; refusing to start in production mode")
+	}
+	return clients.NewFakeLiquidity(clients.FillResult{FillPrice: 50000, TotalFilled: 1}), nil
+}
+
+func buildFX(cfg config.Config, devMode bool) (clients.FXHedging, error) {
+	if cfg.FXHedgingURL != "" {
+		return clients.NewResilientFX(
+			clients.NewHTTPFX(cfg.FXHedgingURL),
+			clients.DefaultRetry(),
+			clients.DefaultCircuitBreaker(),
+		), nil
+	}
+	if !devMode {
+		return nil, errors.New("FX_HEDGING_URL not set and DEV_MODE!=1; refusing to start in production mode")
+	}
+	return clients.NewFakeFX(clients.HedgeResult{HedgedNotional: 0}), nil
+}
+
+func buildWallet(cfg config.Config, devMode bool) (clients.WalletManagement, error) {
+	if cfg.WalletMgmtURL != "" {
+		return clients.NewHTTPWallet(cfg.WalletMgmtURL), nil
+	}
+	if !devMode {
+		return nil, errors.New("WALLET_MGMT_URL not set and DEV_MODE!=1; refusing to start in production mode")
+	}
+	return clients.NewFakeWallet(clients.FundingMoveResult{Completed: true, TxID: "stub"}), nil
+}
+
+func buildLedger(cfg config.Config, devMode bool) (clients.LedgerAccounting, error) {
+	if cfg.LedgerURL != "" {
+		return clients.NewHTTPLedger(cfg.LedgerURL), nil
+	}
+	if !devMode {
+		return nil, errors.New("LEDGER_URL not set and DEV_MODE!=1; refusing to start in production mode")
+	}
+	return clients.NewFakeLedger(), nil
+}
+
+func buildAudit(devMode bool) (clients.AuditLog, error) {
+	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
+		kc, err := clients.NewKafkaAudit(splitCSV(brokers))
+		if err != nil {
+			if devMode {
+				log.Printf("warn: audit kafka init failed (DEV_MODE): %v; using fake audit", err)
+				return clients.NewFakeAudit(), nil
+			}
+			return nil, fmt.Errorf("audit kafka init: %w", err)
+		}
+		return kc, nil
+	}
+	if devMode {
+		log.Printf("warn: KAFKA_BROKERS unset and DEV_MODE=1; audit events recorded in-memory only")
+		return clients.NewFakeAudit(), nil
+	}
+	return nil, errors.New("KAFKA_BROKERS unset and DEV_MODE!=1; refusing to start in production mode")
 }
