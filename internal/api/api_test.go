@@ -541,6 +541,242 @@ func TestRebalancing_ListError(t *testing.T) {
 	}
 }
 
+// --- additional coverage: API error / branch paths ---
+
+func TestFloat_GetError(t *testing.T) {
+	d, _, _ := newDeps(t)
+	d.Float = float.New(float.Deps{
+		Cfg:    config.Config{},
+		Floats: errFloatStore{err: errAPI},
+	})
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/float/USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500", resp.StatusCode)
+	}
+}
+
+func TestFloatList_Error(t *testing.T) {
+	d, _, _ := newDeps(t)
+	d.Float = float.New(float.Deps{
+		Cfg:    config.Config{},
+		Floats: errFloatStore{err: errAPI},
+	})
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/float")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500", resp.StatusCode)
+	}
+}
+
+func TestFloatList_MethodNotAllowed(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/float", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("code=%d want 405", resp.StatusCode)
+	}
+}
+
+func TestAggregateOrders_ListError(t *testing.T) {
+	d, _, _ := newDeps(t)
+	d.Orders = errOrderStore{err: errAPI}
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/aggregate-orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500", resp.StatusCode)
+	}
+}
+
+func TestAggregateOrders_MethodNotAllowed(t *testing.T) {
+	d, _, _ := newDeps(t)
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/aggregate-orders", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("code=%d want 405", resp.StatusCode)
+	}
+}
+
+func TestBatchMemberships_MethodNotAllowed(t *testing.T) {
+	d, all, _ := newDeps(t)
+	b, _ := all.Batch.OpenBatch(context.Background(), "BTC/USD")
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/batches/"+b.ID.String()+"/memberships", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("code=%d want 405", resp.StatusCode)
+	}
+}
+
+func TestBatchMemberships_NilMembersStore(t *testing.T) {
+	d, all, _ := newDeps(t)
+	b, _ := all.Batch.OpenBatch(context.Background(), "BTC/USD")
+	d.Members = nil
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/batches/" + b.ID.String() + "/memberships")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d want 503", resp.StatusCode)
+	}
+}
+
+func TestBatchMemberships_ListError(t *testing.T) {
+	d, _, _ := newDeps(t)
+	d.Members = errMembershipStore{err: errAPI}
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	id := uuid.New().String()
+	resp, err := http.Get(srv.URL + "/v1/batches/" + id + "/memberships")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_UnknownSubPathFallsThroughToGet(t *testing.T) {
+	ctx := context.Background()
+	d, all, _ := newDeps(t)
+	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/batches/" + b.ID.String() + "/unknown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+}
+
+func TestBatchByID_GetMethodNotAllowed(t *testing.T) {
+	ctx := context.Background()
+	d, all, _ := newDeps(t)
+	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/v1/batches/"+b.ID.String(), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("code=%d want 405", resp.StatusCode)
+	}
+}
+
+func TestBatches_ListWithFromTo(t *testing.T) {
+	ctx := context.Background()
+	d, all, _ := newDeps(t)
+	_, _ = all.Batch.OpenBatch(ctx, "BTC/USD")
+	srv := httptest.NewServer(NewRouter(d))
+	defer srv.Close()
+	from := time.Now().Add(-time.Hour).Format(time.RFC3339)
+	to := time.Now().Add(time.Hour).Format(time.RFC3339)
+	resp, err := http.Get(srv.URL + "/v1/batches?from=" + from + "&to=" + to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+}
+
+// errFloatStore implements store.FloatStore returning err for every method.
+type errFloatStore struct{ err error }
+
+func (e errFloatStore) AddFloat(context.Context, *store.FloatPosition) (*store.FloatPosition, error) {
+	return nil, e.err
+}
+func (e errFloatStore) GetFloat(context.Context, string) (*store.FloatPosition, error) {
+	return nil, e.err
+}
+func (e errFloatStore) ListFloat(context.Context) ([]*store.FloatPosition, error) {
+	return nil, e.err
+}
+func (e errFloatStore) ListMaturedFloat(context.Context, time.Time) ([]*store.FloatPosition, error) {
+	return nil, e.err
+}
+func (e errFloatStore) SettleFloat(context.Context, uuid.UUID) (*store.FloatPosition, error) {
+	return nil, e.err
+}
+
+// errOrderStore implements store.AggregateOrderStore returning err.
+type errOrderStore struct{ err error }
+
+func (e errOrderStore) CreateOrder(context.Context, *store.AggregateOrder) (*store.AggregateOrder, error) {
+	return nil, e.err
+}
+func (e errOrderStore) GetOrderByBatch(context.Context, uuid.UUID) (*store.AggregateOrder, error) {
+	return nil, e.err
+}
+func (e errOrderStore) ListOrders(context.Context, string) ([]*store.AggregateOrder, error) {
+	return nil, e.err
+}
+func (e errOrderStore) UpdateOrderFill(context.Context, uuid.UUID, float64, float64, []store.VenueRoute) (*store.AggregateOrder, error) {
+	return nil, e.err
+}
+func (e errOrderStore) SettleOrder(context.Context, uuid.UUID, float64) (*store.AggregateOrder, error) {
+	return nil, e.err
+}
+
+// errMembershipStore implements store.MembershipStore returning err.
+type errMembershipStore struct{ err error }
+
+func (e errMembershipStore) AddMembership(context.Context, *store.Membership) (bool, error) {
+	return false, e.err
+}
+func (e errMembershipStore) ListMemberships(context.Context, uuid.UUID) ([]*store.Membership, error) {
+	return nil, e.err
+}
+func (e errMembershipStore) SumNotional(context.Context, uuid.UUID) (float64, error) {
+	return 0, e.err
+}
+func (e errMembershipStore) ExistsByTxID(context.Context, string) (bool, error) {
+	return false, e.err
+}
+
 func TestNewRouter_NilDepsOmitsRoutes(t *testing.T) {
 	// A Deps with no Batches/Float/Funding should still serve healthz.
 	srv := httptest.NewServer(NewRouter(&Deps{}))
