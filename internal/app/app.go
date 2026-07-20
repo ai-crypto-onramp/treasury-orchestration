@@ -8,10 +8,12 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -53,7 +55,8 @@ type Server struct {
 }
 
 // Build constructs the server from config. When DB_URL is empty it uses
-// in-memory stores; when set it opens Postgres and runs migrations.
+// in-memory stores (only allowed in DEV_MODE=1); when set it opens Postgres
+// and runs migrations.
 func Build(cfg config.Config) (*Server, error) {
 	// Apply essential defaults when the caller constructed Config
 	// directly (without going through config.Load).
@@ -71,6 +74,10 @@ func Build(cfg config.Config) (*Server, error) {
 	}
 
 	ctx := context.Background()
+	devMode := os.Getenv("DEV_MODE") == "1"
+	if devMode {
+		log.Printf("DEV_MODE=1: stub/fake clients in use — NOT FOR PRODUCTION")
+	}
 
 	var (
 		batchStore    store.BatchStore
@@ -97,6 +104,9 @@ func Build(cfg config.Config) (*Server, error) {
 		rebalStore = db.Rebalance()
 		outboxStore = db.Outbox()
 	} else {
+		if !devMode {
+			return nil, errors.New("DB_URL not set and DEV_MODE!=1; refusing to start in production mode")
+		}
 		all := memstore.NewAll()
 		batchStore = all.Batch
 		membershipStore = all.Membership
@@ -121,6 +131,9 @@ func Build(cfg config.Config) (*Server, error) {
 			clients.DefaultCircuitBreaker(),
 		)
 	} else {
+		if !devMode {
+			return nil, errors.New("LIQUIDITY_ROUTING_URL not set and DEV_MODE!=1; refusing to start in production mode")
+		}
 		liquidity = clients.NewFakeLiquidity(clients.FillResult{FillPrice: 50000, TotalFilled: 1})
 	}
 	var fx clients.FXHedging
@@ -131,25 +144,47 @@ func Build(cfg config.Config) (*Server, error) {
 			clients.DefaultCircuitBreaker(),
 		)
 	} else {
+		if !devMode {
+			return nil, errors.New("FX_HEDGING_URL not set and DEV_MODE!=1; refusing to start in production mode")
+		}
 		fx = clients.NewFakeFX(clients.HedgeResult{HedgedNotional: 0})
 	}
 	var wallet clients.WalletManagement
 	if cfg.WalletMgmtURL != "" {
 		wallet = clients.NewHTTPWallet(cfg.WalletMgmtURL)
 	} else {
+		if !devMode {
+			return nil, errors.New("WALLET_MGMT_URL not set and DEV_MODE!=1; refusing to start in production mode")
+		}
 		wallet = clients.NewFakeWallet(clients.FundingMoveResult{Completed: true, TxID: "stub"})
 	}
 	var ledgerCli clients.LedgerAccounting
 	if cfg.LedgerURL != "" {
 		ledgerCli = clients.NewHTTPLedger(cfg.LedgerURL)
 	} else {
+		if !devMode {
+			return nil, errors.New("LEDGER_URL not set and DEV_MODE!=1; refusing to start in production mode")
+		}
 		ledgerCli = clients.NewFakeLedger()
 	}
 	var auditCli clients.AuditLog
-	if cfg.AuditLogURL != "" {
-		auditCli = clients.NewHTTPAudit(cfg.AuditLogURL)
-	} else {
+	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
+		kc, err := clients.NewKafkaAudit(splitCSV(brokers))
+		if err != nil {
+			if devMode {
+				log.Printf("warn: audit kafka init failed (DEV_MODE): %v; using fake audit", err)
+				auditCli = clients.NewFakeAudit()
+			} else {
+				return nil, fmt.Errorf("audit kafka init: %w", err)
+			}
+		} else {
+			auditCli = kc
+		}
+	} else if devMode {
+		log.Printf("warn: KAFKA_BROKERS unset and DEV_MODE=1; audit events recorded in-memory only")
 		auditCli = clients.NewFakeAudit()
+	} else {
+		return nil, errors.New("KAFKA_BROKERS unset and DEV_MODE!=1; refusing to start in production mode")
 	}
 
 	emitter := ledger.New(ledger.Deps{Outbox: outboxStore, Ledger: ledgerCli, Audit: auditCli})
@@ -360,4 +395,15 @@ func cryptoOf(assetPair string) string {
 		}
 	}
 	return assetPair
+}
+
+func splitCSV(s string) []string {
+	out := []string{}
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

@@ -3,6 +3,8 @@ package clients
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
 )
 
 // postJSON performs a POST with JSON body and an Idempotency-Key header,
@@ -342,7 +345,9 @@ type httpAudit struct {
 	client  *timeoutClient
 }
 
-// NewHTTPAudit returns an HTTP-backed audit-event-log client.
+// NewHTTPAudit returns an HTTP-backed audit-event-log client. Deprecated:
+// production wiring uses NewKafkaAudit (publishes the canonical audit.v1
+// envelope to the `audit.v1` Kafka topic).
 func NewHTTPAudit(baseURL string) AuditLog {
 	return &httpAudit{baseURL: baseURL, client: newTimeoutClient(10 * time.Second)}
 }
@@ -350,6 +355,74 @@ func NewHTTPAudit(baseURL string) AuditLog {
 func (h *httpAudit) Emit(ctx context.Context, ev AuditEvent, key string) error {
 	url := h.baseURL + "/v1/audit-events"
 	return h.client.postJSON(ctx, url, ev, key, nil)
+}
+
+// kafkaAudit publishes the canonical audit.v1 envelope (see
+// .github/contracts/asyncapi/audit/v1/asyncapi.yaml) to the `audit.v1` topic.
+type kafkaAudit struct {
+	writer *kafka.Writer
+}
+
+// NewKafkaAudit returns a Kafka-backed audit-event-log client targeting the
+// `audit.v1` topic on the given brokers.
+func NewKafkaAudit(brokers []string) (AuditLog, error) {
+	if len(brokers) == 0 {
+		return nil, fmt.Errorf("audit kafka: no brokers provided")
+	}
+	w := &kafka.Writer{
+		Addr:         kafka.TCP(brokers...),
+		Topic:        "audit.v1",
+		Balancer:     &kafka.LeastBytes{},
+		BatchTimeout: 10 * time.Millisecond,
+		RequiredAcks: kafka.RequireAll,
+	}
+	return &kafkaAudit{writer: w}, nil
+}
+
+func (k *kafkaAudit) Emit(ctx context.Context, ev AuditEvent, key string) error {
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(payload)
+	payloadHash := "sha256:" + hex.EncodeToString(sum[:])
+	id := key
+	if id == "" {
+		id = uuid.NewString()
+	}
+	envelope := map[string]any{
+		"schema_version": "1",
+		"id":              id,
+		"ts":              time.Now().UTC().Format(time.RFC3339Nano),
+		"source_service":  "treasury-orchestration",
+		"actor_id":        coalesceStr(ev.Actor, "treasury-orchestration"),
+		"action":          ev.EventType,
+		"target_type":     "batch",
+		"target_id":       ev.Aggregate,
+		"payload_hash":    payloadHash,
+		"payload":         json.RawMessage(payload),
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	return k.writer.WriteMessages(ctx, kafka.Message{Key: []byte(id), Value: body})
+}
+
+func (k *kafkaAudit) Close() error {
+	if k.writer == nil {
+		return nil
+	}
+	return k.writer.Close()
+}
+
+func coalesceStr(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // FakeAudit is a test double for AuditLog.
