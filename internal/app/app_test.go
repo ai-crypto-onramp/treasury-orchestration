@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,11 @@ import (
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/eventbus"
 )
+
+func TestMain(m *testing.M) {
+	os.Setenv("DEV_MODE", "1")
+	os.Exit(m.Run())
+}
 
 // TestApp_FullFlow exercises the in-memory composition root: build the
 // server, POST a tx completion event, observe a batch membership, close
