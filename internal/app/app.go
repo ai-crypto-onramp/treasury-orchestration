@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/aggregate"
@@ -239,10 +240,11 @@ func Build(cfg config.Config) (*Server, error) {
 	root.Handle("/", mux)
 	root.Handle("/v1/events/", httpPush.HTTPHandler())
 	root.Handle("/metrics", promhttp.Handler())
+	wrapped := otelhttp.NewHandler(root, "treasury-orchestration")
 
 	srv := &Server{
 		cfg:       cfg,
-		mux:       root,
+		mux:       wrapped,
 		consumer:  cons,
 		scheduler: scheduler,
 		float:     floatTracker,
@@ -250,7 +252,7 @@ func Build(cfg config.Config) (*Server, error) {
 		db:        db,
 		http: &http.Server{
 			Addr:              ":" + cfg.Port,
-			Handler:           root,
+			Handler:           wrapped,
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}

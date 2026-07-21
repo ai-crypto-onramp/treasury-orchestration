@@ -6,13 +6,21 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/app"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
+	"github.com/ai-crypto-onramp/treasury-orchestration/internal/otel"
 )
 
 func main() {
+	shutdown, err := otel.Init("treasury-orchestration")
+	if err != nil {
+		log.Fatalf("otel init: %v", err)
+	}
+	defer func() { _ = shutdown(context.Background()) }()
+
 	cfg := config.Load()
 	srv, err := app.Build(cfg)
 	if err != nil {
