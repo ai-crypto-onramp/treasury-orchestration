@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 )
@@ -26,15 +27,15 @@ func TestBatchStore_OpenAndTransition(t *testing.T) {
 		t.Fatalf("expected same batch id, got %s vs %s", b2.ID, b.ID)
 	}
 	// Transition open -> closed.
-	updated, ok, err := s.UpdateBatchStatus(ctx, b.ID, store.BatchOpen, store.BatchClosed, func(x *store.Batch) { x.NotionalUSD = 100 })
+	updated, ok, err := s.UpdateBatchStatus(ctx, b.ID, store.BatchOpen, store.BatchClosed, func(x *store.Batch) { x.NotionalUSD = decimal.NewFromInt(100) })
 	if err != nil || !ok {
 		t.Fatalf("transition open->closed: %v ok=%v", err, ok)
 	}
 	if updated.Status != store.BatchClosed {
 		t.Fatalf("expected closed, got %s", updated.Status)
 	}
-	if updated.NotionalUSD != 100 {
-		t.Fatalf("expected notional 100, got %f", updated.NotionalUSD)
+	if !updated.NotionalUSD.Equal(decimal.NewFromInt(100)) {
+		t.Fatalf("expected notional 100, got %s", updated.NotionalUSD.String())
 	}
 	if updated.ClosedAt.IsZero() {
 		t.Fatal("expected closed_at set")
@@ -54,7 +55,7 @@ func TestMembershipStore_DedupByTxID(t *testing.T) {
 	bs := NewBatchStore()
 	b, _ := bs.OpenBatch(ctx, "ETH/USD")
 	ms := NewMembershipStore()
-	m := &store.Membership{BatchID: b.ID, TxID: "tx1", Amount: 1, Asset: "ETH", FiatCurrency: "USD", NotionalUSD: 2000}
+	m := &store.Membership{BatchID: b.ID, TxID: "tx1", Amount: decimal.NewFromInt(1), Asset: "ETH", FiatCurrency: "USD", NotionalUSD: decimal.NewFromInt(2000)}
 	ok, err := ms.AddMembership(ctx, m)
 	if err != nil || !ok {
 		t.Fatalf("first add: %v ok=%v", err, ok)
@@ -71,8 +72,8 @@ func TestMembershipStore_DedupByTxID(t *testing.T) {
 		t.Fatal("expected exists")
 	}
 	sum, _ := ms.SumNotional(ctx, b.ID)
-	if sum != 2000 {
-		t.Fatalf("sum=%f want 2000", sum)
+	if !sum.Equal(decimal.NewFromInt(2000)) {
+		t.Fatalf("sum=%s want 2000", sum.String())
 	}
 }
 
@@ -80,7 +81,7 @@ func TestAggregateOrderStore_CreateIdempotent(t *testing.T) {
 	ctx := context.Background()
 	s := NewAggregateOrderStore()
 	batchID, _ := uuid.NewV7()
-	o := &store.AggregateOrder{BatchID: batchID, AssetPair: "BTC/USD", NotionalUSD: 50000}
+	o := &store.AggregateOrder{BatchID: batchID, AssetPair: "BTC/USD", NotionalUSD: decimal.NewFromInt(50000)}
 	a, err := s.CreateOrder(ctx, o)
 	if err != nil {
 		t.Fatal(err)
@@ -92,16 +93,16 @@ func TestAggregateOrderStore_CreateIdempotent(t *testing.T) {
 	if b.ID != a.ID {
 		t.Fatalf("expected idempotent create, got %s vs %s", b.ID, a.ID)
 	}
-	updated, _ := s.UpdateOrderFill(ctx, batchID, 50001, 1, []store.VenueRoute{{Venue: "v1", Share: 1, Price: 50001}})
-	if updated.FillPrice != 50001 {
-		t.Fatalf("fill_price=%f want 50001", updated.FillPrice)
+	updated, _ := s.UpdateOrderFill(ctx, batchID, decimal.NewFromInt(50001), decimal.NewFromInt(1), []store.VenueRoute{{Venue: "v1", Share: decimal.NewFromInt(1), Price: decimal.NewFromInt(50001)}})
+	if !updated.FillPrice.Equal(decimal.NewFromInt(50001)) {
+		t.Fatalf("fill_price=%s want 50001", updated.FillPrice.String())
 	}
-	settled, _ := s.SettleOrder(ctx, batchID, 40000)
+	settled, _ := s.SettleOrder(ctx, batchID, decimal.NewFromInt(40000))
 	if settled.Status != store.AggregateSettled {
 		t.Fatalf("expected settled, got %s", settled.Status)
 	}
-	if settled.HedgedNotional != 40000 {
-		t.Fatalf("hedged=%f want 40000", settled.HedgedNotional)
+	if !settled.HedgedNotional.Equal(decimal.NewFromInt(40000)) {
+		t.Fatalf("hedged=%s want 40000", settled.HedgedNotional.String())
 	}
 }
 
@@ -109,29 +110,29 @@ func TestFloatStore_AddAndSettle(t *testing.T) {
 	ctx := context.Background()
 	s := NewFloatStore()
 	due := time.Now().UTC().Add(48 * time.Hour)
-	p, err := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 1000, LongCryptoAmount: 0.02, LongCryptoAsset: "BTC", SettlementDueAt: due})
+	p, err := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(1000), LongCryptoAmount: decimal.NewFromFloat(0.02), LongCryptoAsset: "BTC", SettlementDueAt: due})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ShortFiatAmount != 1000 {
-		t.Fatalf("short=%f want 1000", p.ShortFiatAmount)
+	if !p.ShortFiatAmount.Equal(decimal.NewFromInt(1000)) {
+		t.Fatalf("short=%s want 1000", p.ShortFiatAmount.String())
 	}
 	// Accumulate into the same row.
-	p2, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 500, LongCryptoAmount: 0.01, LongCryptoAsset: "BTC"})
+	p2, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(500), LongCryptoAmount: decimal.NewFromFloat(0.01), LongCryptoAsset: "BTC"})
 	if p2.ID != p.ID {
 		t.Fatalf("expected same row, got %s vs %s", p2.ID, p.ID)
 	}
-	if p2.ShortFiatAmount != 1500 {
-		t.Fatalf("short=%f want 1500", p2.ShortFiatAmount)
+	if !p2.ShortFiatAmount.Equal(decimal.NewFromInt(1500)) {
+		t.Fatalf("short=%s want 1500", p2.ShortFiatAmount.String())
 	}
 	// GetFloat aggregates.
 	agg, _ := s.GetFloat(ctx, "USD")
-	if agg.ShortFiatAmount != 1500 {
-		t.Fatalf("agg short=%f want 1500", agg.ShortFiatAmount)
+	if !agg.ShortFiatAmount.Equal(decimal.NewFromInt(1500)) {
+		t.Fatalf("agg short=%s want 1500", agg.ShortFiatAmount.String())
 	}
 	// Matured list (due in the past).
 	before := time.Now().UTC()
-	past, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "EUR", ShortFiatAmount: 100, LongCryptoAmount: 0.001, LongCryptoAsset: "BTC", SettlementDueAt: before.Add(-1 * time.Hour)})
+	past, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "EUR", ShortFiatAmount: decimal.NewFromInt(100), LongCryptoAmount: decimal.NewFromFloat(0.001), LongCryptoAsset: "BTC", SettlementDueAt: before.Add(-1 * time.Hour)})
 	matured, _ := s.ListMaturedFloat(ctx, before.Add(time.Minute))
 	if len(matured) != 1 || matured[0].ID != past.ID {
 		t.Fatalf("expected 1 matured, got %v", matured)
@@ -223,14 +224,14 @@ func TestBatchStore_GetListAndNotional(t *testing.T) {
 		t.Fatalf("expected 1 open (b2), got %+v", open)
 	}
 	// SetBatchNotional.
-	if err := s.SetBatchNotional(ctx, b1.ID, 1234); err != nil {
+	if err := s.SetBatchNotional(ctx, b1.ID, decimal.NewFromInt(1234)); err != nil {
 		t.Fatal(err)
 	}
 	got2, _ := s.GetBatch(ctx, b1.ID)
-	if got2.NotionalUSD != 1234 {
-		t.Fatalf("notional=%f want 1234", got2.NotionalUSD)
+	if !got2.NotionalUSD.Equal(decimal.NewFromInt(1234)) {
+		t.Fatalf("notional=%s want 1234", got2.NotionalUSD.String())
 	}
-	if err := s.SetBatchNotional(ctx, uuid.New(), 1); err != store.ErrNotFound {
+	if err := s.SetBatchNotional(ctx, uuid.New(), decimal.NewFromInt(1)); err != store.ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -267,8 +268,8 @@ func TestMembershipStore_ListAndMissing(t *testing.T) {
 	if len(list) != 0 {
 		t.Fatalf("expected 0, got %d", len(list))
 	}
-	_, _ = ms.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "a", NotionalUSD: 10})
-	_, _ = ms.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "b", NotionalUSD: 30})
+	_, _ = ms.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "a", NotionalUSD: decimal.NewFromInt(10)})
+	_, _ = ms.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "b", NotionalUSD: decimal.NewFromInt(30)})
 	got, _ := ms.ListMemberships(ctx, b.ID)
 	if len(got) != 2 {
 		t.Fatalf("expected 2, got %d", len(got))
@@ -277,8 +278,8 @@ func TestMembershipStore_ListAndMissing(t *testing.T) {
 		t.Fatal("expected sorted by id")
 	}
 	// SumNotional on unknown batch returns 0.
-	if sum, _ := ms.SumNotional(ctx, uuid.New()); sum != 0 {
-		t.Fatalf("expected 0 sum, got %f", sum)
+	if sum, _ := ms.SumNotional(ctx, uuid.New()); !sum.Equal(decimal.Zero) {
+		t.Fatalf("expected 0 sum, got %s", sum.String())
 	}
 	// ExistsByTxID false for unknown.
 	if ex, _ := ms.ExistsByTxID(ctx, "nope"); ex {
@@ -293,10 +294,10 @@ func TestAggregateOrderStore_NotFoundPaths(t *testing.T) {
 	if _, err := s.GetOrderByBatch(ctx, unknownBatch); err != store.ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
-	if _, err := s.UpdateOrderFill(ctx, unknownBatch, 1, 1, nil); err != store.ErrNotFound {
+	if _, err := s.UpdateOrderFill(ctx, unknownBatch, decimal.NewFromInt(1), decimal.NewFromInt(1), nil); err != store.ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
-	if _, err := s.SettleOrder(ctx, unknownBatch, 1); err != store.ErrNotFound {
+	if _, err := s.SettleOrder(ctx, unknownBatch, decimal.NewFromInt(1)); err != store.ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 	// CreateOrder with defaults applied when side/status empty.
@@ -319,12 +320,12 @@ func TestFundingStore_CRUD(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 	// Create with explicit status keeps it.
-	f0, _ := s.CreateFunding(ctx, &store.FundingRequest{Asset: "BTC", Amount: 1, Status: store.FundingExecuting})
+	f0, _ := s.CreateFunding(ctx, &store.FundingRequest{Asset: "BTC", Amount: decimal.NewFromInt(1), Status: store.FundingExecuting})
 	if f0.ID == uuid.Nil || f0.Status != store.FundingExecuting {
 		t.Fatalf("unexpected f0=%+v", f0)
 	}
 	// Create with empty status defaults to pending.
-	f1, _ := s.CreateFunding(ctx, &store.FundingRequest{Asset: "ETH", Amount: 2})
+	f1, _ := s.CreateFunding(ctx, &store.FundingRequest{Asset: "ETH", Amount: decimal.NewFromInt(2)})
 	if f1.Status != store.FundingPending {
 		t.Fatalf("expected pending default, got %s", f1.Status)
 	}
@@ -350,7 +351,7 @@ func TestFundingStore_CRUD(t *testing.T) {
 		t.Fatalf("rejected state wrong: %+v", upd0)
 	}
 	// UpdateFundingStatus on executing does not set CompletedAt.
-	f2, _ := s.CreateFunding(ctx, &store.FundingRequest{Asset: "ETH", Amount: 3})
+	f2, _ := s.CreateFunding(ctx, &store.FundingRequest{Asset: "ETH", Amount: decimal.NewFromInt(3)})
 	if err := s.UpdateFundingStatus(ctx, f2.ID, store.FundingExecuting); err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +382,7 @@ func TestFloatStore_EdgeCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.ShortFiatAmount != 0 || g.LongCryptoAmount != 0 {
+	if !g.ShortFiatAmount.Equal(decimal.Zero) || !g.LongCryptoAmount.Equal(decimal.Zero) {
 		t.Fatalf("expected zero float, got %+v", g)
 	}
 	// ListMaturedFloat on empty.
@@ -390,8 +391,8 @@ func TestFloatStore_EdgeCases(t *testing.T) {
 		t.Fatalf("expected 0 matured, got %d", len(m))
 	}
 	// AddFloat without due date (accumulation path with no settlement update).
-	p1, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 100, LongCryptoAmount: 0.01, LongCryptoAsset: "BTC"})
-	p2, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 50, LongCryptoAmount: 0.005, LongCryptoAsset: ""})
+	p1, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(100), LongCryptoAmount: decimal.NewFromFloat(0.01), LongCryptoAsset: "BTC"})
+	p2, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(50), LongCryptoAmount: decimal.NewFromFloat(0.005), LongCryptoAsset: ""})
 	if p2.ID != p1.ID {
 		t.Fatalf("expected accumulation into same row, got %s vs %s", p2.ID, p1.ID)
 	}
@@ -403,14 +404,14 @@ func TestFloatStore_EdgeCases(t *testing.T) {
 	if _, err := s.SettleFloat(ctx, p1.ID); err != nil {
 		t.Fatal(err)
 	}
-	p3, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 20, LongCryptoAmount: 0.002, LongCryptoAsset: "BTC"})
+	p3, _ := s.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(20), LongCryptoAmount: decimal.NewFromFloat(0.002), LongCryptoAsset: "BTC"})
 	if p3.ID == p1.ID {
 		t.Fatal("expected new row after settle, got same id")
 	}
 	// GetFloat aggregates both settled and unsettled rows.
 	agg, _ := s.GetFloat(ctx, "USD")
-	if agg.ShortFiatAmount != 170 {
-		t.Fatalf("agg short=%f want 170", agg.ShortFiatAmount)
+	if !agg.ShortFiatAmount.Equal(decimal.NewFromInt(170)) {
+		t.Fatalf("agg short=%s want 170", agg.ShortFiatAmount.String())
 	}
 }
 
@@ -423,12 +424,12 @@ func TestRebalancingStore_CRUD(t *testing.T) {
 		t.Fatalf("expected 0, got %d", len(list))
 	}
 	// Create with default status.
-	j0, _ := s.CreateJob(ctx, &store.RebalancingJob{FromRef: "w1", ToRef: "w2", Asset: "BTC", Amount: 100})
+	j0, _ := s.CreateJob(ctx, &store.RebalancingJob{FromRef: "w1", ToRef: "w2", Asset: "BTC", Amount: decimal.NewFromInt(100)})
 	if j0.ID == uuid.Nil || j0.Status != store.RebalancePending {
 		t.Fatalf("unexpected j0=%+v", j0)
 	}
 	// Create with explicit status keeps it.
-	j1, _ := s.CreateJob(ctx, &store.RebalancingJob{FromRef: "w3", ToRef: "w4", Asset: "ETH", Amount: 50, Status: store.RebalanceExecuting})
+	j1, _ := s.CreateJob(ctx, &store.RebalancingJob{FromRef: "w3", ToRef: "w4", Asset: "ETH", Amount: decimal.NewFromInt(50), Status: store.RebalanceExecuting})
 	if j1.Status != store.RebalanceExecuting {
 		t.Fatalf("expected executing kept, got %s", j1.Status)
 	}
@@ -440,7 +441,7 @@ func TestRebalancingStore_CRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	// UpdateJobStatus executing does not set CompletedAt.
-	j2, _ := s.CreateJob(ctx, &store.RebalancingJob{FromRef: "w5", ToRef: "w6", Asset: "SOL", Amount: 5})
+	j2, _ := s.CreateJob(ctx, &store.RebalancingJob{FromRef: "w5", ToRef: "w6", Asset: "SOL", Amount: decimal.NewFromInt(5)})
 	if err := s.UpdateJobStatus(ctx, j2.ID, store.RebalanceExecuting); err != nil {
 		t.Fatal(err)
 	}

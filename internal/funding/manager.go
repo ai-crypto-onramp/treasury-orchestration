@@ -11,6 +11,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
@@ -48,19 +50,21 @@ func New(deps Deps) *Manager { return &Manager{deps: deps} }
 // CreateFundingRequest is the handler for POST /v1/funding-requests. It
 // validates the amount against the capital allocation policy, persists
 // the request, then dispatches the move to wallet-management.
-func (m *Manager) CreateFundingRequest(ctx context.Context, walletID, asset string, amount float64, sourceVenue string) (*store.FundingRequest, error) {
-	if amount <= 0 {
+//
+// BREAKING CHANGE: amount is now accepted as a decimal string in JSON.
+func (m *Manager) CreateFundingRequest(ctx context.Context, walletID, asset string, amount decimal.Decimal, sourceVenue string) (*store.FundingRequest, error) {
+	if !amount.GreaterThan(decimal.Zero) {
 		return nil, ErrInvalidAmount
 	}
-	if amount > MaxFundingAmount {
+	if amount.GreaterThan(decimal.NewFromInt(MaxFundingAmount)) {
 		metrics.FundingRequests.WithLabelValues(asset, "rejected").Inc()
-		log.Printf("funding: policy violation asset=%s amount=%.2f", asset, amount)
+		log.Printf("funding: policy violation asset=%s amount=%s", asset, amount.String())
 		return nil, ErrPolicyViolation
 	}
 	// Check projected demand vs target; only fund when projected
 	// balance < target.
 	target := m.deps.Cfg.HotWalletTargetFor(asset)
-	demand := 0.0
+	demand := decimal.Decimal{}
 	if m.deps.Projection != nil {
 		demand = m.deps.Projection.ProjectedDemand(asset)
 	}
@@ -103,7 +107,7 @@ func (m *Manager) CreateFundingRequest(ctx context.Context, walletID, asset stri
 		return fr, err
 	}
 	metrics.FundingRequests.WithLabelValues(asset, "ok").Inc()
-	log.Printf("funding: completed id=%s wallet=%s asset=%s amount=%.2f", fr.ID, walletID, asset, amount)
+	log.Printf("funding: completed id=%s wallet=%s asset=%s amount=%s", fr.ID, walletID, asset, amount.String())
 	return fr, nil
 }
 
@@ -114,11 +118,11 @@ func (m *Manager) ListFunding(ctx context.Context, status string) ([]*store.Fund
 
 // Rebalance detects drift below target or venue excess and creates a
 // rebalancing job, then dispatches the move via wallet-management.
-func (m *Manager) Rebalance(ctx context.Context, fromRef, toRef, asset string, amount float64, reason string) (*store.RebalancingJob, error) {
-	if amount <= 0 {
+func (m *Manager) Rebalance(ctx context.Context, fromRef, toRef, asset string, amount decimal.Decimal, reason string) (*store.RebalancingJob, error) {
+	if !amount.GreaterThan(decimal.Zero) {
 		return nil, ErrInvalidAmount
 	}
-	if amount > MaxFundingAmount {
+	if amount.GreaterThan(decimal.NewFromInt(MaxFundingAmount)) {
 		metrics.RebalanceJobs.WithLabelValues(asset, "rejected").Inc()
 		return nil, ErrPolicyViolation
 	}
@@ -157,7 +161,7 @@ func (m *Manager) Rebalance(ctx context.Context, fromRef, toRef, asset string, a
 		return job, err
 	}
 	metrics.RebalanceJobs.WithLabelValues(asset, "ok").Inc()
-	log.Printf("rebalance: completed id=%s asset=%s amount=%.2f", job.ID, asset, amount)
+	log.Printf("rebalance: completed id=%s asset=%s amount=%s", job.ID, asset, amount.String())
 	return job, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
@@ -24,16 +25,16 @@ func TestTracker_OnAggregateFillIncrementsFloat(t *testing.T) {
 	ctx := context.Background()
 	tr, floats := newTracker(t, config.Config{SettlementDays: map[string]int{"USD": 2}})
 	batch := &store.Batch{ID: uuid.New(), AssetPair: "BTC/USD"}
-	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: 50000, TotalFilled: 1}
+	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: decimal.NewFromInt(50000), TotalFilled: decimal.NewFromInt(1)}
 	if err := tr.OnAggregateFill(ctx, batch, order, "USD", "BTC"); err != nil {
 		t.Fatal(err)
 	}
 	pos, _ := floats.GetFloat(ctx, "USD")
-	if pos.ShortFiatAmount != 50000 {
-		t.Fatalf("short=%f want 50000", pos.ShortFiatAmount)
+	if !pos.ShortFiatAmount.Equal(decimal.NewFromInt(50000)) {
+		t.Fatalf("short=%s want 50000", pos.ShortFiatAmount.String())
 	}
-	if pos.LongCryptoAmount != 1 {
-		t.Fatalf("long=%f want 1", pos.LongCryptoAmount)
+	if !pos.LongCryptoAmount.Equal(decimal.NewFromInt(1)) {
+		t.Fatalf("long=%s want 1", pos.LongCryptoAmount.String())
 	}
 	if pos.LongCryptoAsset != "BTC" {
 		t.Fatalf("asset=%s want BTC", pos.LongCryptoAsset)
@@ -44,7 +45,7 @@ func TestTracker_SettlementDueAtIsTPlusN(t *testing.T) {
 	ctx := context.Background()
 	tr, floats := newTracker(t, config.Config{SettlementDays: map[string]int{"USD": 2, "JPY": 3}})
 	batch := &store.Batch{ID: uuid.New(), AssetPair: "BTC/JPY"}
-	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: 1000, TotalFilled: 0.1}
+	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: decimal.NewFromInt(1000), TotalFilled: decimal.NewFromFloat(0.1)}
 	if err := tr.OnAggregateFill(ctx, batch, order, "JPY", "BTC"); err != nil {
 		t.Fatal(err)
 	}
@@ -65,12 +66,12 @@ func TestTracker_BreachMaxTriggersAlert(t *testing.T) {
 	tr := New(Deps{
 		Cfg:    config.Config{MaxFloatUSD: 100000, SettlementDays: map[string]int{"USD": 2}},
 		Floats: all.Float,
-		OnBreach: func(ctx context.Context, fiat string, amount float64, bound string) {
+		OnBreach: func(ctx context.Context, fiat string, amount decimal.Decimal, bound string) {
 			breaches = append(breaches, fiat+":"+bound)
 		},
 	})
 	batch := &store.Batch{ID: uuid.New(), AssetPair: "BTC/USD"}
-	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: 200000, TotalFilled: 4}
+	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: decimal.NewFromInt(200000), TotalFilled: decimal.NewFromInt(4)}
 	if err := tr.OnAggregateFill(ctx, batch, order, "USD", "BTC"); err != nil {
 		t.Fatal(err)
 	}
@@ -86,12 +87,12 @@ func TestTracker_BreachMinTriggersAlert(t *testing.T) {
 	tr := New(Deps{
 		Cfg:    config.Config{MinFloatUSD: 300000, SettlementDays: map[string]int{"USD": 2}},
 		Floats: all.Float,
-		OnBreach: func(ctx context.Context, fiat string, amount float64, bound string) {
+		OnBreach: func(ctx context.Context, fiat string, amount decimal.Decimal, bound string) {
 			breaches = append(breaches, fiat+":"+bound)
 		},
 	})
 	batch := &store.Batch{ID: uuid.New(), AssetPair: "BTC/USD"}
-	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: 1000, TotalFilled: 0.01}
+	order := &store.AggregateOrder{ID: uuid.New(), BatchID: batch.ID, NotionalUSD: decimal.NewFromInt(1000), TotalFilled: decimal.NewFromFloat(0.01)}
 	if err := tr.OnAggregateFill(ctx, batch, order, "USD", "BTC"); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestTracker_SweepMaturedSettles(t *testing.T) {
 	all := memstore.NewAll()
 	tr := New(Deps{Cfg: config.Config{}, Floats: all.Float})
 	past := time.Now().UTC().Add(-1 * time.Hour)
-	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 1000, LongCryptoAmount: 0.02, LongCryptoAsset: "BTC", SettlementDueAt: past})
+	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(1000), LongCryptoAmount: decimal.NewFromFloat(0.02), LongCryptoAsset: "BTC", SettlementDueAt: past})
 	n, err := tr.SweepMatured(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -124,28 +125,28 @@ func TestTracker_SweepMaturedSettles(t *testing.T) {
 func TestTracker_Get(t *testing.T) {
 	ctx := context.Background()
 	tr, floats := newTracker(t, config.Config{SettlementDays: map[string]int{"USD": 2}})
-	_, _ = floats.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 750, LongCryptoAmount: 0.01, LongCryptoAsset: "BTC"})
+	_, _ = floats.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(750), LongCryptoAmount: decimal.NewFromFloat(0.01), LongCryptoAsset: "BTC"})
 	pos, err := tr.Get(ctx, "USD")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pos.ShortFiatAmount != 750 {
-		t.Fatalf("short=%f want 750", pos.ShortFiatAmount)
+	if !pos.ShortFiatAmount.Equal(decimal.NewFromInt(750)) {
+		t.Fatalf("short=%s want 750", pos.ShortFiatAmount.String())
 	}
 	// Get on an unknown currency returns a zero position (no error).
 	pos2, err := tr.Get(ctx, "EUR")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pos2.ShortFiatAmount != 0 {
-		t.Fatalf("short=%f want 0", pos2.ShortFiatAmount)
+	if !pos2.ShortFiatAmount.Equal(decimal.Zero) {
+		t.Fatalf("short=%s want 0", pos2.ShortFiatAmount.String())
 	}
 }
 
 func TestTracker_OnAggregateFillAddFloatError(t *testing.T) {
 	ctx := context.Background()
 	tr := New(Deps{Cfg: config.Config{SettlementDays: map[string]int{"USD": 2}}, Floats: errFloatStore{}})
-	err := tr.OnAggregateFill(ctx, &store.Batch{ID: uuid.New()}, &store.AggregateOrder{NotionalUSD: 100, TotalFilled: 1}, "USD", "BTC")
+	err := tr.OnAggregateFill(ctx, &store.Batch{ID: uuid.New()}, &store.AggregateOrder{NotionalUSD: decimal.NewFromInt(100), TotalFilled: decimal.NewFromInt(1)}, "USD", "BTC")
 	if !errors.Is(err, errFloat) {
 		t.Fatalf("err=%v want errFloat", err)
 	}
@@ -158,9 +159,9 @@ func TestTracker_OnAggregateFillOnAdjustHook(t *testing.T) {
 	tr := New(Deps{
 		Cfg:      config.Config{SettlementDays: map[string]int{"USD": 2}},
 		Floats:   all.Float,
-		OnAdjust: func(context.Context, string, float64, uuid.UUID) { adjusted <- struct{}{} },
+		OnAdjust: func(context.Context, string, decimal.Decimal, uuid.UUID) { adjusted <- struct{}{} },
 	})
-	if err := tr.OnAggregateFill(ctx, &store.Batch{ID: uuid.New()}, &store.AggregateOrder{NotionalUSD: 100, TotalFilled: 1}, "USD", "BTC"); err != nil {
+	if err := tr.OnAggregateFill(ctx, &store.Batch{ID: uuid.New()}, &store.AggregateOrder{NotionalUSD: decimal.NewFromInt(100), TotalFilled: decimal.NewFromInt(1)}, "USD", "BTC"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -209,7 +210,7 @@ func TestTracker_RunSweeperLoopDispatches(t *testing.T) {
 	all := memstore.NewAll()
 	tr := New(Deps{Cfg: config.Config{}, Floats: all.Float})
 	past := time.Now().UTC().Add(-1 * time.Hour)
-	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 100, LongCryptoAmount: 0.01, LongCryptoAsset: "BTC", SettlementDueAt: past})
+	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(100), LongCryptoAmount: decimal.NewFromFloat(0.01), LongCryptoAsset: "BTC", SettlementDueAt: past})
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -271,7 +272,7 @@ func (s *settleErrFloatStore) GetFloat(context.Context, string) (*store.FloatPos
 	return &store.FloatPosition{}, nil
 }
 func (s *settleErrFloatStore) ListMaturedFloat(_ context.Context, _ time.Time) ([]*store.FloatPosition, error) {
-	return []*store.FloatPosition{{ID: uuid.New(), FiatCurrency: "USD", ShortFiatAmount: 100, SettlementDueAt: time.Now().UTC().Add(-time.Hour)}}, nil
+	return []*store.FloatPosition{{ID: uuid.New(), FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(100), SettlementDueAt: time.Now().UTC().Add(-time.Hour)}}, nil
 }
 func (s *settleErrFloatStore) ListFloat(context.Context) ([]*store.FloatPosition, error) {
 	return nil, errFloat

@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
+	"github.com/shopspring/decimal"
 )
 
 // postJSON performs a POST with JSON body and an Idempotency-Key header,
@@ -74,15 +75,15 @@ func (h *httpLiquidity) SubmitAggregate(ctx context.Context, req AggregateOrderR
 
 // HedgeRequest is the FX exposure payload forwarded to fx-hedging.
 type HedgeRequest struct {
-	FiatCurrency string    `json:"fiat_currency"`
-	NotionalUSD  float64   `json:"notional_usd"`
-	BatchID      uuid.UUID `json:"batch_id"`
+	FiatCurrency string          `json:"fiat_currency"`
+	NotionalUSD  decimal.Decimal `json:"notional_usd"`
+	BatchID      uuid.UUID       `json:"batch_id"`
 }
 
 // HedgeResult is the fx-hedging response.
 type HedgeResult struct {
-	HedgedNotional float64 `json:"hedged_notional"`
-	Unhedged       float64 `json:"unhedged"`
+	HedgedNotional decimal.Decimal `json:"hedged_notional"`
+	Unhedged       decimal.Decimal `json:"unhedged"`
 }
 
 // FXHedging is the client interface for the fx-hedging service.
@@ -111,11 +112,11 @@ func (h *httpFX) SubmitExposure(ctx context.Context, req HedgeRequest, key strin
 
 // FakeFX is a test double for FXHedging.
 type FakeFX struct {
-	calls    []HedgeRequest
-	keys     map[string]bool
-	result   HedgeResult
-	err      error
-	dupErr   bool
+	calls  []HedgeRequest
+	keys   map[string]bool
+	result HedgeResult
+	err    error
+	dupErr bool
 }
 
 // NewFakeFX returns a fake fx-hedging client.
@@ -153,16 +154,16 @@ func (f *FakeFX) Calls() []HedgeRequest {
 
 // FundingMoveRequest instructs wallet-management to move funds.
 type FundingMoveRequest struct {
-	WalletID string  `json:"wallet_id"`
-	Asset    string  `json:"asset"`
-	Amount   float64 `json:"amount"`
-	Source   string  `json:"source_venue"`
+	WalletID string          `json:"wallet_id"`
+	Asset    string          `json:"asset"`
+	Amount   decimal.Decimal `json:"amount"`
+	Source   string          `json:"source_venue"`
 }
 
 // FundingMoveResult is the wallet-management response.
 type FundingMoveResult struct {
 	Completed bool   `json:"completed"`
-	TxID       string `json:"tx_id"`
+	TxID      string `json:"tx_id"`
 }
 
 // WalletManagement is the client interface for wallet-management.
@@ -227,12 +228,12 @@ func (f *FakeWallet) Calls() []FundingMoveRequest {
 
 // LedgerPost is one ledger posting.
 type LedgerPost struct {
-	Aggregate    string    `json:"aggregate"`
-	EventType    string    `json:"event_type"`
-	NotionalUSD  float64   `json:"notional_usd"`
-	Asset        string    `json:"asset"`
-	FiatCurrency string    `json:"fiat_currency"`
-	BatchID      uuid.UUID `json:"batch_id,omitempty"`
+	Aggregate    string          `json:"aggregate"`
+	EventType    string          `json:"event_type"`
+	NotionalUSD  decimal.Decimal `json:"notional_usd"`
+	Asset        string          `json:"asset"`
+	FiatCurrency string          `json:"fiat_currency"`
+	BatchID      uuid.UUID       `json:"batch_id,omitempty"`
 }
 
 // LedgerAccounting is the client interface for ledger-accounting.
@@ -254,15 +255,11 @@ func (h *httpLedger) Post(ctx context.Context, post LedgerPost, key string) erro
 	url := h.baseURL + "/v1/postings"
 	// Transform the treasury's domain-specific post into a balanced
 	// double-entry posting the ledger expects: debit treasury_crypto,
-	// credit operational_fiat for the same amount + asset.
+	// credit operational_fiat for the same amount + asset. The amount is
+	// forwarded at full precision as a string; the previous int64
+	// truncation that dropped fractional cents and turned zero-amount
+	// posts into 1 has been removed.
 	amount := post.NotionalUSD
-	if amount == 0 {
-		amount = 1
-	}
-	amountInt := int64(amount)
-	if amountInt == 0 {
-		amountInt = 1
-	}
 	asset := post.FiatCurrency
 	if asset == "" {
 		asset = "USD"
@@ -271,8 +268,8 @@ func (h *httpLedger) Post(ctx context.Context, post LedgerPost, key string) erro
 		"posting_id": key,
 		"memo":       post.Aggregate + ":" + post.EventType,
 		"entries": []map[string]any{
-			{"account_id": "treasury_crypto", "direction": "debit", "amount": amountInt, "asset": asset},
-			{"account_id": "operational_fiat", "direction": "credit", "amount": amountInt, "asset": asset},
+			{"account_id": "treasury_crypto", "direction": "debit", "amount": amount.String(), "asset": asset},
+			{"account_id": "operational_fiat", "direction": "credit", "amount": amount.String(), "asset": asset},
 		},
 	}
 	return h.client.postJSON(ctx, url, body, key, nil)
@@ -280,11 +277,11 @@ func (h *httpLedger) Post(ctx context.Context, post LedgerPost, key string) erro
 
 // FakeLedger is a test double for LedgerAccounting.
 type FakeLedger struct {
-	mu      sync.Mutex
-	calls   []LedgerPost
-	keys    map[string]bool
-	err     error
-	dupErr  bool
+	mu     sync.Mutex
+	calls  []LedgerPost
+	keys   map[string]bool
+	err    error
+	dupErr bool
 }
 
 // NewFakeLedger returns a fake ledger client.
@@ -392,15 +389,15 @@ func (k *kafkaAudit) Emit(ctx context.Context, ev AuditEvent, key string) error 
 	}
 	envelope := map[string]any{
 		"schema_version": "1",
-		"id":              id,
-		"ts":              time.Now().UTC().Format(time.RFC3339Nano),
-		"source_service":  "treasury-orchestration",
-		"actor_id":        coalesceStr(ev.Actor, "treasury-orchestration"),
-		"action":          ev.EventType,
-		"target_type":     "batch",
-		"target_id":       ev.Aggregate,
-		"payload_hash":    payloadHash,
-		"payload":         json.RawMessage(payload),
+		"id":             id,
+		"ts":             time.Now().UTC().Format(time.RFC3339Nano),
+		"source_service": "treasury-orchestration",
+		"actor_id":       coalesceStr(ev.Actor, "treasury-orchestration"),
+		"action":         ev.EventType,
+		"target_type":    "batch",
+		"target_id":      ev.Aggregate,
+		"payload_hash":   payloadHash,
+		"payload":        json.RawMessage(payload),
 	}
 	body, err := json.Marshal(envelope)
 	if err != nil {

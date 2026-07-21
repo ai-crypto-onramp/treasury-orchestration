@@ -7,6 +7,8 @@ package projection
 import (
 	"sync"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // Model is a rolling-window demand projection per asset. It is safe for
@@ -18,8 +20,8 @@ type Model struct {
 }
 
 type sample struct {
-	at      time.Time
-	notional float64
+	at       time.Time
+	notional decimal.Decimal
 }
 
 // New returns a model with the given rolling window.
@@ -29,7 +31,7 @@ func New(window time.Duration) *Model {
 
 // Observe records a notional amount for an asset at the given time (now
 // if zero).
-func (m *Model) Observe(asset string, notional float64, at time.Time) {
+func (m *Model) Observe(asset string, notional decimal.Decimal, at time.Time) {
 	if at.IsZero() {
 		at = time.Now()
 	}
@@ -44,33 +46,33 @@ func (m *Model) Observe(asset string, notional float64, at time.Time) {
 // window. Velocity = sum of notional observed in the trailing window;
 // projected forward demand = velocity (i.e. assume the recent rate
 // continues for one more window).
-func (m *Model) ProjectedDemand(asset string) float64 {
+func (m *Model) ProjectedDemand(asset string) decimal.Decimal {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.evictLocked(asset, now)
-	var sum float64
+	sum := decimal.Decimal{}
 	for _, s := range m.samples[asset] {
-		sum += s.notional
+		sum = sum.Add(s.notional)
 	}
 	return sum
 }
 
 // VelocityPerSecond returns the notional per second for the asset over
 // the trailing window.
-func (m *Model) VelocityPerSecond(asset string) float64 {
+func (m *Model) VelocityPerSecond(asset string) decimal.Decimal {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.evictLocked(asset, now)
-	var sum float64
+	sum := decimal.Decimal{}
 	for _, s := range m.samples[asset] {
-		sum += s.notional
+		sum = sum.Add(s.notional)
 	}
 	if m.window <= 0 {
-		return 0
+		return decimal.Decimal{}
 	}
-	return sum / m.window.Seconds()
+	return sum.Div(decimal.NewFromFloat(m.window.Seconds()))
 }
 
 func (m *Model) evictLocked(asset string, now time.Time) {

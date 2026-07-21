@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 func TestCircuitBreaker_OpensAfterThreshold(t *testing.T) {
@@ -111,7 +113,7 @@ func TestDo_CircuitOpenFailsFast(t *testing.T) {
 }
 
 func TestResilientLiquidity_Retries(t *testing.T) {
-	f := NewFakeLiquidity(FillResult{FillPrice: 1, TotalFilled: 1})
+	f := NewFakeLiquidity(FillResult{FillPrice: decimal.NewFromInt(1), TotalFilled: decimal.NewFromInt(1)})
 	f.SetError(ErrUnavailable)
 	r := NewResilientLiquidity(f, RetryOptions{MaxAttempts: 2, Backoff: time.Millisecond}, nil)
 	// First call errors with ErrUnavailable; the fake clears the error
@@ -121,7 +123,7 @@ func TestResilientLiquidity_Retries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected success after retry, got %v", err)
 	}
-	if out == nil || out.FillPrice != 1 {
+	if out == nil || !out.FillPrice.Equal(decimal.NewFromInt(1)) {
 		t.Fatalf("expected fill, got %+v", out)
 	}
 	calls := f.Calls()

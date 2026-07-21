@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 // BatchStatus enumerates the lifecycle states of a batch.
@@ -68,88 +69,88 @@ const (
 
 // Batch is one aggregate parent order.
 type Batch struct {
-	ID          uuid.UUID    `json:"id"`
-	AssetPair   string       `json:"asset_pair"`
-	Status      BatchStatus  `json:"status"`
-	NotionalUSD float64      `json:"notional_usd"`
-	OpenedAt    time.Time    `json:"opened_at"`
-	ClosedAt    time.Time    `json:"closed_at"`
+	ID          uuid.UUID       `json:"id"`
+	AssetPair   string          `json:"asset_pair"`
+	Status      BatchStatus     `json:"status"`
+	NotionalUSD decimal.Decimal `json:"notional_usd"`
+	OpenedAt    time.Time       `json:"opened_at"`
+	ClosedAt    time.Time       `json:"closed_at"`
 }
 
 // Membership links a single Transaction Orchestrator tx into a batch.
 type Membership struct {
-	ID           uuid.UUID `json:"id"`
-	BatchID      uuid.UUID `json:"batch_id"`
-	TxID         string    `json:"tx_id"`
-	Amount       float64   `json:"amount"`
-	Asset        string    `json:"asset"`
-	FiatCurrency string    `json:"fiat_currency"`
-	NotionalUSD  float64   `json:"notional_usd"`
-	UserID       string    `json:"user_id"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           uuid.UUID       `json:"id"`
+	BatchID      uuid.UUID       `json:"batch_id"`
+	TxID         string          `json:"tx_id"`
+	Amount       decimal.Decimal `json:"amount"`
+	Asset        string          `json:"asset"`
+	FiatCurrency string          `json:"fiat_currency"`
+	NotionalUSD  decimal.Decimal `json:"notional_usd"`
+	UserID       string          `json:"user_id"`
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 // AggregateOrder is the executed parent order against Liquidity Routing.
 type AggregateOrder struct {
-	ID             uuid.UUID        `json:"id"`
-	BatchID        uuid.UUID        `json:"batch_id"`
-	AssetPair      string           `json:"asset_pair"`
-	Side           string           `json:"side"`
-	NotionalUSD    float64          `json:"notional_usd"`
-	VenueRoutes    []VenueRoute     `json:"venue_routes"`
-	FillPrice      float64          `json:"fill_price"`
-	TotalFilled    float64          `json:"total_filled"`
-	HedgedNotional float64          `json:"hedged_notional"`
-	Status         AggregateStatus  `json:"status"`
-	CreatedAt      time.Time        `json:"created_at"`
-	SettledAt      time.Time        `json:"settled_at"`
+	ID             uuid.UUID       `json:"id"`
+	BatchID        uuid.UUID       `json:"batch_id"`
+	AssetPair      string          `json:"asset_pair"`
+	Side           string          `json:"side"`
+	NotionalUSD    decimal.Decimal `json:"notional_usd"`
+	VenueRoutes    []VenueRoute    `json:"venue_routes"`
+	FillPrice      decimal.Decimal `json:"fill_price"`
+	TotalFilled    decimal.Decimal `json:"total_filled"`
+	HedgedNotional decimal.Decimal `json:"hedged_notional"`
+	Status         AggregateStatus `json:"status"`
+	CreatedAt      time.Time       `json:"created_at"`
+	SettledAt      time.Time       `json:"settled_at"`
 }
 
 // VenueRoute describes one slice of an aggregate fill.
 type VenueRoute struct {
-	Venue string  `json:"venue"`
-	Share float64 `json:"share"`
-	Price float64 `json:"price"`
+	Venue string          `json:"venue"`
+	Share decimal.Decimal `json:"share"`
+	Price decimal.Decimal `json:"price"`
 }
 
 // FundingRequest is a hot-wallet funding instruction.
 type FundingRequest struct {
-	ID          uuid.UUID      `json:"id"`
-	WalletID    string         `json:"wallet_id"`
-	Asset       string         `json:"asset"`
-	Amount      float64        `json:"amount"`
-	Status      FundingStatus  `json:"status"`
-	SourceVenue string         `json:"source_venue"`
-	CreatedAt   time.Time      `json:"created_at"`
-	CompletedAt time.Time      `json:"completed_at"`
+	ID          uuid.UUID       `json:"id"`
+	WalletID    string          `json:"wallet_id"`
+	Asset       string          `json:"asset"`
+	Amount      decimal.Decimal `json:"amount"`
+	Status      FundingStatus   `json:"status"`
+	SourceVenue string          `json:"source_venue"`
+	CreatedAt   time.Time       `json:"created_at"`
+	CompletedAt time.Time       `json:"completed_at"`
 }
 
 // FloatPosition is the per-fiat-currency T+0 long-crypto / short-fiat
 // position created by fronting crypto before fiat settles.
 type FloatPosition struct {
-	ID               uuid.UUID `json:"id"`
-	FiatCurrency     string    `json:"fiat_currency"`
-	ShortFiatAmount  float64   `json:"short_fiat_amount"`
-	LongCryptoAmount float64   `json:"long_crypto_amount"`
-	LongCryptoAsset  string    `json:"long_crypto_asset"`
-	SettlementDueAt  time.Time `json:"settlement_due_at"`
-	Settled          bool      `json:"settled"`
-	BatchID          uuid.UUID `json:"batch_id"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               uuid.UUID       `json:"id"`
+	FiatCurrency     string          `json:"fiat_currency"`
+	ShortFiatAmount  decimal.Decimal `json:"short_fiat_amount"`
+	LongCryptoAmount decimal.Decimal `json:"long_crypto_amount"`
+	LongCryptoAsset  string          `json:"long_crypto_asset"`
+	SettlementDueAt  time.Time       `json:"settlement_due_at"`
+	Settled          bool            `json:"settled"`
+	BatchID          uuid.UUID       `json:"batch_id"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
 // RebalancingJob is a persisted wallet/venue rebalance record.
 type RebalancingJob struct {
-	ID          uuid.UUID        `json:"id"`
-	FromRef     string           `json:"from"`
-	ToRef       string           `json:"to"`
-	Asset       string           `json:"asset"`
-	Amount      float64          `json:"amount"`
-	Status      RebalanceStatus  `json:"status"`
-	Reason      string           `json:"reason"`
-	CreatedAt   time.Time        `json:"created_at"`
-	CompletedAt time.Time        `json:"completed_at"`
+	ID          uuid.UUID       `json:"id"`
+	FromRef     string          `json:"from"`
+	ToRef       string          `json:"to"`
+	Asset       string          `json:"asset"`
+	Amount      decimal.Decimal `json:"amount"`
+	Status      RebalanceStatus `json:"status"`
+	Reason      string          `json:"reason"`
+	CreatedAt   time.Time       `json:"created_at"`
+	CompletedAt time.Time       `json:"completed_at"`
 }
 
 // OutboxEntry is a deduped outbound event awaiting ledger/audit emission.
@@ -170,14 +171,14 @@ type BatchStore interface {
 	ListBatches(ctx context.Context, from, to time.Time) ([]*Batch, error)
 	ListOpenBatches(ctx context.Context) ([]*Batch, error)
 	UpdateBatchStatus(ctx context.Context, id uuid.UUID, from, to BatchStatus, mutator func(*Batch)) (*Batch, bool, error)
-	SetBatchNotional(ctx context.Context, id uuid.UUID, notional float64) error
+	SetBatchNotional(ctx context.Context, id uuid.UUID, notional decimal.Decimal) error
 }
 
 // MembershipStore persists tx memberships.
 type MembershipStore interface {
 	AddMembership(ctx context.Context, m *Membership) (bool, error)
 	ListMemberships(ctx context.Context, batchID uuid.UUID) ([]*Membership, error)
-	SumNotional(ctx context.Context, batchID uuid.UUID) (float64, error)
+	SumNotional(ctx context.Context, batchID uuid.UUID) (decimal.Decimal, error)
 	ExistsByTxID(ctx context.Context, txID string) (bool, error)
 }
 
@@ -186,8 +187,8 @@ type AggregateOrderStore interface {
 	CreateOrder(ctx context.Context, o *AggregateOrder) (*AggregateOrder, error)
 	GetOrderByBatch(ctx context.Context, batchID uuid.UUID) (*AggregateOrder, error)
 	ListOrders(ctx context.Context, status string) ([]*AggregateOrder, error)
-	UpdateOrderFill(ctx context.Context, batchID uuid.UUID, fillPrice, totalFilled float64, venueRoutes []VenueRoute) (*AggregateOrder, error)
-	SettleOrder(ctx context.Context, batchID uuid.UUID, hedgedNotional float64) (*AggregateOrder, error)
+	UpdateOrderFill(ctx context.Context, batchID uuid.UUID, fillPrice, totalFilled decimal.Decimal, venueRoutes []VenueRoute) (*AggregateOrder, error)
+	SettleOrder(ctx context.Context, batchID uuid.UUID, hedgedNotional decimal.Decimal) (*AggregateOrder, error)
 }
 
 // FundingStore persists hot-wallet funding requests.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
@@ -22,12 +23,12 @@ import (
 
 // Deps bundles the executor dependencies.
 type Deps struct {
-	Batches store.BatchStore
-	Orders  store.AggregateOrderStore
-	Liquidity clients.LiquidityRouting
-	Idem      idempotency.Store
-	ExpectedPriceFor func(assetPair string) float64
-	OnFill   func(ctx context.Context, batch *store.Batch, order *store.AggregateOrder)
+	Batches          store.BatchStore
+	Orders           store.AggregateOrderStore
+	Liquidity        clients.LiquidityRouting
+	Idem             idempotency.Store
+	ExpectedPriceFor func(assetPair string) decimal.Decimal
+	OnFill           func(ctx context.Context, batch *store.Batch, order *store.AggregateOrder)
 }
 
 // Executor submits closed batches as aggregate parent orders.
@@ -105,11 +106,11 @@ func (e *Executor) SubmitBatch(ctx context.Context, batchID uuid.UUID) (*store.A
 	// Record slippage histogram vs expected price.
 	if e.deps.ExpectedPriceFor != nil {
 		expected := e.deps.ExpectedPriceFor(batch.AssetPair)
-		if expected > 0 {
-			metrics.SlippageUSD.WithLabelValues(batch.AssetPair).Observe((fill.FillPrice - expected) * fill.TotalFilled)
+		if expected.GreaterThan(decimal.Zero) {
+			metrics.SlippageUSD.WithLabelValues(batch.AssetPair).Observe(fill.FillPrice.Sub(expected).Mul(fill.TotalFilled).InexactFloat64())
 		}
 	}
-	log.Printf("aggregate: filled batch=%s fill_price=%.4f total_filled=%.4f", batch.ID, fill.FillPrice, fill.TotalFilled)
+	log.Printf("aggregate: filled batch=%s fill_price=%s total_filled=%s", batch.ID, fill.FillPrice.String(), fill.TotalFilled.String())
 	if e.deps.OnFill != nil {
 		e.deps.OnFill(ctx, batch, updated)
 	}

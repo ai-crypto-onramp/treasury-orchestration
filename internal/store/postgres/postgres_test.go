@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 )
@@ -127,7 +128,7 @@ func TestDB_AllStoreMethodsReturnErrors(t *testing.T) {
 	if _, _, err := d.Batch().UpdateBatchStatus(ctx, id, store.BatchOpen, store.BatchClosed, nil); err == nil {
 		t.Fatal("UpdateBatchStatus: expected error")
 	}
-	if err := d.Batch().SetBatchNotional(ctx, id, 100); err == nil {
+	if err := d.Batch().SetBatchNotional(ctx, id, decimal.NewFromInt(100)); err == nil {
 		t.Fatal("SetBatchNotional: expected error")
 	}
 
@@ -151,9 +152,9 @@ func TestDB_AllStoreMethodsReturnErrors(t *testing.T) {
 		BatchID:     id,
 		AssetPair:   "BTC/USD",
 		Side:        "BUY",
-		NotionalUSD: 1000,
+		NotionalUSD: decimal.NewFromInt(1000),
 		Status:      store.AggregateExecuting,
-		VenueRoutes: []store.VenueRoute{{Venue: "v", Share: 1, Price: 1}},
+		VenueRoutes: []store.VenueRoute{{Venue: "v", Share: decimal.NewFromInt(1), Price: decimal.NewFromInt(1)}},
 	}
 	if _, err := d.Order().CreateOrder(ctx, o); err == nil {
 		t.Fatal("CreateOrder: expected error")
@@ -167,15 +168,15 @@ func TestDB_AllStoreMethodsReturnErrors(t *testing.T) {
 	if _, err := d.Order().ListOrders(ctx, string(store.AggregateSettled)); err == nil {
 		t.Fatal("ListOrders(status): expected error")
 	}
-	if _, err := d.Order().UpdateOrderFill(ctx, id, 1, 1, []store.VenueRoute{{Venue: "v", Share: 1, Price: 1}}); err == nil {
+	if _, err := d.Order().UpdateOrderFill(ctx, id, decimal.NewFromInt(1), decimal.NewFromInt(1), []store.VenueRoute{{Venue: "v", Share: decimal.NewFromInt(1), Price: decimal.NewFromInt(1)}}); err == nil {
 		t.Fatal("UpdateOrderFill: expected error")
 	}
-	if _, err := d.Order().SettleOrder(ctx, id, 1); err == nil {
+	if _, err := d.Order().SettleOrder(ctx, id, decimal.NewFromInt(1)); err == nil {
 		t.Fatal("SettleOrder: expected error")
 	}
 
 	// FundingStore
-	f := &store.FundingRequest{WalletID: "w", Asset: "BTC", Amount: 1, Status: store.FundingPending}
+	f := &store.FundingRequest{WalletID: "w", Asset: "BTC", Amount: decimal.NewFromInt(1), Status: store.FundingPending}
 	if _, err := d.Funding().CreateFunding(ctx, f); err == nil {
 		t.Fatal("CreateFunding: expected error")
 	}
@@ -196,7 +197,7 @@ func TestDB_AllStoreMethodsReturnErrors(t *testing.T) {
 	}
 
 	// FloatStore
-	fp := &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 1, LongCryptoAmount: 0.01, LongCryptoAsset: "BTC", SettlementDueAt: time.Now().Add(24 * time.Hour)}
+	fp := &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(1), LongCryptoAmount: decimal.NewFromFloat(0.01), LongCryptoAsset: "BTC", SettlementDueAt: time.Now().Add(24 * time.Hour)}
 	if _, err := d.Float().AddFloat(ctx, fp); err == nil {
 		t.Fatal("AddFloat: expected error")
 	}
@@ -214,7 +215,7 @@ func TestDB_AllStoreMethodsReturnErrors(t *testing.T) {
 	}
 
 	// RebalancingStore
-	j := &store.RebalancingJob{FromRef: "a", ToRef: "b", Asset: "BTC", Amount: 1, Status: store.RebalancePending, Reason: "drift"}
+	j := &store.RebalancingJob{FromRef: "a", ToRef: "b", Asset: "BTC", Amount: decimal.NewFromInt(1), Status: store.RebalancePending, Reason: "drift"}
 	if _, err := d.Rebalance().CreateJob(ctx, j); err == nil {
 		t.Fatal("CreateJob: expected error")
 	}

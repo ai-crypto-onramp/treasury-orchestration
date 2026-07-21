@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/eventbus"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
@@ -38,7 +39,7 @@ func TestConsumer_AutoOpensBatchAndDedupes(t *testing.T) {
 	defer func() { cancel(); <-done }()
 	time.Sleep(50 * time.Millisecond)
 
-	ev := eventbus.TxCompletedEvent{TxID: "tx1", Amount: 1, Asset: "BTC", FiatCurrency: "USD", NotionalUSD: 1000}
+	ev := eventbus.TxCompletedEvent{TxID: "tx1", Amount: decimal.NewFromInt(1), Asset: "BTC", FiatCurrency: "USD", NotionalUSD: decimal.NewFromInt(1000)}
 	_ = bus.Push(ctx, "tx.completed", ev)
 	_ = bus.Push(ctx, "tx.completed", ev) // dup
 
@@ -144,15 +145,15 @@ func TestConsumer_HandleNotionalFallback(t *testing.T) {
 	ctx := context.Background()
 	c, all, _, _ := newDeps(t)
 	// NotionalUSD == 0 -> use Amount.
-	ev := eventbus.TxCompletedEvent{TxID: "nf1", Asset: "BTC", FiatCurrency: "USD", Amount: 2, NotionalUSD: 0}
+	ev := eventbus.TxCompletedEvent{TxID: "nf1", Asset: "BTC", FiatCurrency: "USD", Amount: decimal.NewFromInt(2), NotionalUSD: decimal.Decimal{}}
 	c.handle(ctx, ev)
 	exists, _ := all.Membership.ExistsByTxID(ctx, "nf1")
 	if !exists {
 		t.Fatal("expected membership persisted")
 	}
 	open, _ := all.Batch.ListOpenBatches(ctx)
-	if len(open) != 1 || open[0].NotionalUSD != 2 {
-		t.Fatalf("notional=%f want 2 (from Amount)", open[0].NotionalUSD)
+	if len(open) != 1 || !open[0].NotionalUSD.Equal(decimal.NewFromInt(2)) {
+		t.Fatalf("notional=%s want 2 (from Amount)", open[0].NotionalUSD.String())
 	}
 }
 
@@ -299,18 +300,22 @@ func (errSubscriber) Subscribe(context.Context, string) (<-chan eventbus.TxCompl
 func (errSubscriber) Push(context.Context, string, eventbus.TxCompletedEvent) error { return nil }
 
 type closeChanSubscriber struct {
-	ch   chan eventbus.TxCompletedEvent
+	ch chan eventbus.TxCompletedEvent
 }
 
 func (s *closeChanSubscriber) Subscribe(context.Context, string) (<-chan eventbus.TxCompletedEvent, func(), error) {
 	return s.ch, func() {}, nil
 }
-func (s *closeChanSubscriber) Push(context.Context, string, eventbus.TxCompletedEvent) error { return nil }
+func (s *closeChanSubscriber) Push(context.Context, string, eventbus.TxCompletedEvent) error {
+	return nil
+}
 
 type errIdemStore struct{}
 
-func (errIdemStore) CheckAndMark(context.Context, string, time.Duration) (bool, error) { return false, errSub }
-func (errIdemStore) Delete(context.Context, string) error                              { return nil }
+func (errIdemStore) CheckAndMark(context.Context, string, time.Duration) (bool, error) {
+	return false, errSub
+}
+func (errIdemStore) Delete(context.Context, string) error { return nil }
 
 var errStore = errors.New("store boom")
 
@@ -327,7 +332,9 @@ func (errBatchStore) ListOpenBatches(context.Context) ([]*store.Batch, error) { 
 func (errBatchStore) UpdateBatchStatus(context.Context, uuid.UUID, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
 	return nil, false, errStore
 }
-func (errBatchStore) SetBatchNotional(context.Context, uuid.UUID, float64) error { return errStore }
+func (errBatchStore) SetBatchNotional(context.Context, uuid.UUID, decimal.Decimal) error {
+	return errStore
+}
 
 type errMembershipStore struct{}
 
@@ -337,8 +344,10 @@ func (errMembershipStore) AddMembership(context.Context, *store.Membership) (boo
 func (errMembershipStore) ListMemberships(context.Context, uuid.UUID) ([]*store.Membership, error) {
 	return nil, errStore
 }
-func (errMembershipStore) SumNotional(context.Context, uuid.UUID) (float64, error) { return 0, errStore }
-func (errMembershipStore) ExistsByTxID(context.Context, string) (bool, error)       { return false, errStore }
+func (errMembershipStore) SumNotional(context.Context, uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Decimal{}, errStore
+}
+func (errMembershipStore) ExistsByTxID(context.Context, string) (bool, error) { return false, errStore }
 
 // addErrMembershipStore succeeds on ExistsByTxID / ListMemberships but
 // errors on AddMembership.
@@ -349,8 +358,12 @@ type addErrMembershipStore struct {
 func (a *addErrMembershipStore) ListMemberships(_ context.Context, _ uuid.UUID) ([]*store.Membership, error) {
 	return a.rows, nil
 }
-func (a *addErrMembershipStore) ExistsByTxID(context.Context, string) (bool, error) { return false, nil }
+func (a *addErrMembershipStore) ExistsByTxID(context.Context, string) (bool, error) {
+	return false, nil
+}
 func (a *addErrMembershipStore) AddMembership(context.Context, *store.Membership) (bool, error) {
 	return false, errStore
 }
-func (a *addErrMembershipStore) SumNotional(context.Context, uuid.UUID) (float64, error) { return 0, nil }
+func (a *addErrMembershipStore) SumNotional(context.Context, uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Decimal{}, nil
+}

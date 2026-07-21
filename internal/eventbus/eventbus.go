@@ -23,18 +23,19 @@ import (
 	"sync"
 
 	"github.com/segmentio/kafka-go"
+	"github.com/shopspring/decimal"
 )
 
 // TxCompletedEvent is the payload emitted by transaction-orchestrator on
 // tx completion.
 type TxCompletedEvent struct {
-	TxID         string  `json:"tx_id"`
-	Amount       float64 `json:"amount"`
-	Asset        string  `json:"asset"`
-	FiatCurrency string  `json:"fiat_currency"`
-	NotionalUSD  float64 `json:"notional_usd"`
-	UserID       string  `json:"user_id"`
-	CompletedAt  string  `json:"completed_at"`
+	TxID         string          `json:"tx_id"`
+	Amount       decimal.Decimal `json:"amount"`
+	Asset        string          `json:"asset"`
+	FiatCurrency string          `json:"fiat_currency"`
+	NotionalUSD  decimal.Decimal `json:"notional_usd"`
+	UserID       string          `json:"user_id"`
+	CompletedAt  string          `json:"completed_at"`
 }
 
 // EventSubscriber consumes tx completion events.
@@ -49,8 +50,8 @@ type EventSubscriber interface {
 
 // InMemorySubscriber is a channel-backed fan-in subscriber for tests.
 type InMemorySubscriber struct {
-	mu        sync.Mutex
-	channels  map[string][]chan TxCompletedEvent
+	mu       sync.Mutex
+	channels map[string][]chan TxCompletedEvent
 }
 
 // NewInMemory returns an in-memory event subscriber.

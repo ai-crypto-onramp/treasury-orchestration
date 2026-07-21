@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 func TestInMemory_PushAndSubscribe(t *testing.T) {
@@ -269,10 +271,10 @@ func TestKafkaSubscriber_SubscribeStopClosesChannel(t *testing.T) {
 func TestTxCompletedEvent_JSONRoundtrip(t *testing.T) {
 	ev := TxCompletedEvent{
 		TxID:         "tx-7",
-		Amount:       1.5,
+		Amount:       decimal.NewFromFloat(1.5),
 		Asset:        "BTC",
 		FiatCurrency: "USD",
-		NotionalUSD:  75000,
+		NotionalUSD:  decimal.NewFromInt(75000),
 		UserID:       "u42",
 		CompletedAt:  "2024-01-02T03:04:05Z",
 	}
@@ -284,7 +286,7 @@ func TestTxCompletedEvent_JSONRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got != ev {
+	if got.TxID != ev.TxID || !got.Amount.Equal(ev.Amount) || !got.NotionalUSD.Equal(ev.NotionalUSD) || got.Asset != ev.Asset || got.FiatCurrency != ev.FiatCurrency || got.UserID != ev.UserID || got.CompletedAt != ev.CompletedAt {
 		t.Fatalf("roundtrip mismatch: got=%+v want=%+v", got, ev)
 	}
 }

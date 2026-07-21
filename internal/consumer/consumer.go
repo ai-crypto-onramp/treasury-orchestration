@@ -131,7 +131,7 @@ func (c *Consumer) handle(ctx context.Context, ev eventbus.TxCompletedEvent) {
 	existing, _ := c.Deps.Memberships.ListMemberships(ctx, batch.ID)
 	isNew := len(existing) == 0
 	notional := ev.NotionalUSD
-	if notional == 0 {
+	if notional.IsZero() {
 		notional = ev.Amount
 	}
 	_, err = c.Deps.Memberships.AddMembership(ctx, &store.Membership{
@@ -155,7 +155,7 @@ func (c *Consumer) handle(ctx context.Context, ev eventbus.TxCompletedEvent) {
 	// checks.
 	sum, _ := c.Deps.Memberships.SumNotional(ctx, batch.ID)
 	_ = c.Deps.Batches.SetBatchNotional(ctx, batch.ID, sum)
-	log.Printf("consumer: added tx=%s pair=%s batch=%s notional=%.2f", ev.TxID, assetPair, batch.ID, sum)
+	log.Printf("consumer: added tx=%s pair=%s batch=%s notional=%s", ev.TxID, assetPair, batch.ID, sum.String())
 	metrics.EventsConsumed.WithLabelValues(assetPair, "ok").Inc()
 }
 

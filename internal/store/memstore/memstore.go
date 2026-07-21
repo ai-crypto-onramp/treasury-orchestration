@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 )
@@ -138,7 +139,7 @@ func (s *BatchStore) UpdateBatchStatus(_ context.Context, id uuid.UUID, from, to
 	return nil, false, store.ErrNotFound
 }
 
-func (s *BatchStore) SetBatchNotional(_ context.Context, id uuid.UUID, notional float64) error {
+func (s *BatchStore) SetBatchNotional(_ context.Context, id uuid.UUID, notional decimal.Decimal) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, b := range s.rows {
@@ -193,13 +194,13 @@ func (s *MembershipStore) ListMemberships(_ context.Context, batchID uuid.UUID) 
 	return out, nil
 }
 
-func (s *MembershipStore) SumNotional(_ context.Context, batchID uuid.UUID) (float64, error) {
+func (s *MembershipStore) SumNotional(_ context.Context, batchID uuid.UUID) (decimal.Decimal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var sum float64
+	sum := decimal.Decimal{}
 	for _, m := range s.rows {
 		if m.BatchID == batchID {
-			sum += m.NotionalUSD
+			sum = sum.Add(m.NotionalUSD)
 		}
 	}
 	return sum, nil
@@ -272,7 +273,7 @@ func (s *AggregateOrderStore) ListOrders(_ context.Context, status string) ([]*s
 	return out, nil
 }
 
-func (s *AggregateOrderStore) UpdateOrderFill(_ context.Context, batchID uuid.UUID, fillPrice, totalFilled float64, venueRoutes []store.VenueRoute) (*store.AggregateOrder, error) {
+func (s *AggregateOrderStore) UpdateOrderFill(_ context.Context, batchID uuid.UUID, fillPrice, totalFilled decimal.Decimal, venueRoutes []store.VenueRoute) (*store.AggregateOrder, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -286,7 +287,7 @@ func (s *AggregateOrderStore) UpdateOrderFill(_ context.Context, batchID uuid.UU
 	return nil, store.ErrNotFound
 }
 
-func (s *AggregateOrderStore) SettleOrder(_ context.Context, batchID uuid.UUID, hedgedNotional float64) (*store.AggregateOrder, error) {
+func (s *AggregateOrderStore) SettleOrder(_ context.Context, batchID uuid.UUID, hedgedNotional decimal.Decimal) (*store.AggregateOrder, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -380,8 +381,8 @@ func (s *FloatStore) AddFloat(_ context.Context, p *store.FloatPosition) (*store
 	// Accumulate into the latest unsettled row for the currency.
 	for _, r := range s.rows {
 		if r.FiatCurrency == p.FiatCurrency && !r.Settled {
-			r.ShortFiatAmount += p.ShortFiatAmount
-			r.LongCryptoAmount += p.LongCryptoAmount
+			r.ShortFiatAmount = r.ShortFiatAmount.Add(p.ShortFiatAmount)
+			r.LongCryptoAmount = r.LongCryptoAmount.Add(p.LongCryptoAmount)
 			if p.LongCryptoAsset != "" {
 				r.LongCryptoAsset = p.LongCryptoAsset
 			}
@@ -414,8 +415,8 @@ func (s *FloatStore) GetFloat(_ context.Context, fiatCurrency string) (*store.Fl
 		if agg == nil {
 			agg = &store.FloatPosition{FiatCurrency: fiatCurrency, LongCryptoAsset: r.LongCryptoAsset}
 		}
-		agg.ShortFiatAmount += r.ShortFiatAmount
-		agg.LongCryptoAmount += r.LongCryptoAmount
+		agg.ShortFiatAmount = agg.ShortFiatAmount.Add(r.ShortFiatAmount)
+		agg.LongCryptoAmount = agg.LongCryptoAmount.Add(r.LongCryptoAmount)
 		if r.SettlementDueAt.After(agg.SettlementDueAt) {
 			agg.SettlementDueAt = r.SettlementDueAt
 		}
@@ -438,8 +439,8 @@ func (s *FloatStore) ListFloat(_ context.Context) ([]*store.FloatPosition, error
 			byCcy[r.FiatCurrency] = agg
 			order = append(order, r.FiatCurrency)
 		}
-		agg.ShortFiatAmount += r.ShortFiatAmount
-		agg.LongCryptoAmount += r.LongCryptoAmount
+		agg.ShortFiatAmount = agg.ShortFiatAmount.Add(r.ShortFiatAmount)
+		agg.LongCryptoAmount = agg.LongCryptoAmount.Add(r.LongCryptoAmount)
 		if r.LongCryptoAsset != "" {
 			agg.LongCryptoAsset = r.LongCryptoAsset
 		}

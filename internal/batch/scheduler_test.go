@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
@@ -38,8 +39,8 @@ func TestScheduler_SizeThresholdClosesBatch(t *testing.T) {
 	cfg := config.Config{BatchIntervalSeconds: 3600, BatchSizeThresholdUSD: 5000}
 	s, all, _ := newSchedulerDeps(t, cfg)
 	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
-	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", NotionalUSD: 6000, Asset: "BTC", FiatCurrency: "USD"})
-	_ = all.Batch.SetBatchNotional(ctx, b.ID, 6000)
+	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", NotionalUSD: decimal.NewFromInt(6000), Asset: "BTC", FiatCurrency: "USD"})
+	_ = all.Batch.SetBatchNotional(ctx, b.ID, decimal.NewFromInt(6000))
 	reason := s.shouldClose(ctx, b)
 	if reason != ReasonSize {
 		t.Fatalf("reason=%q want size", reason)
@@ -143,16 +144,22 @@ func (e errBatchStore) ListOpenBatches(context.Context) ([]*store.Batch, error) 
 func (e errBatchStore) UpdateBatchStatus(context.Context, uuid.UUID, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
 	return nil, false, e.err
 }
-func (e errBatchStore) SetBatchNotional(context.Context, uuid.UUID, float64) error { return e.err }
+func (e errBatchStore) SetBatchNotional(context.Context, uuid.UUID, decimal.Decimal) error {
+	return e.err
+}
 
 type noOpMembership struct{}
 
-func (noOpMembership) AddMembership(context.Context, *store.Membership) (bool, error) { return true, nil }
+func (noOpMembership) AddMembership(context.Context, *store.Membership) (bool, error) {
+	return true, nil
+}
 func (noOpMembership) ListMemberships(context.Context, uuid.UUID) ([]*store.Membership, error) {
 	return nil, nil
 }
-func (noOpMembership) SumNotional(context.Context, uuid.UUID) (float64, error) { return 0, nil }
-func (noOpMembership) ExistsByTxID(context.Context, string) (bool, error)     { return false, nil }
+func (noOpMembership) SumNotional(context.Context, uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Decimal{}, nil
+}
+func (noOpMembership) ExistsByTxID(context.Context, string) (bool, error) { return false, nil }
 
 func TestScheduler_TickListErrorReturns(t *testing.T) {
 	ctx := context.Background()
@@ -276,7 +283,7 @@ func TestScheduler_TickLockAcquireError(t *testing.T) {
 	all := memstore.NewAll()
 	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
 	// Make it size-eligible so tick tries to acquire the lock.
-	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t", NotionalUSD: 1000, Asset: "BTC", FiatCurrency: "USD"})
+	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t", NotionalUSD: decimal.NewFromInt(1000), Asset: "BTC", FiatCurrency: "USD"})
 	s := New(Deps{
 		Cfg:         cfg,
 		Batches:     all.Batch,

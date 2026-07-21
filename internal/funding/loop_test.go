@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
@@ -36,7 +38,7 @@ func TestManager_RunRebalanceLoop_CreatesFundingWhenDemandExceedsTarget(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	f := newMgrWithCfg(t, config.Config{HotWalletTargets: map[string]float64{"BTC": 10}})
-	f.proj.Observe("BTC", 50, time.Now())
+	f.proj.Observe("BTC", decimal.NewFromInt(50), time.Now())
 	go func() {
 		_ = f.mgr.RunRebalanceLoop(ctx, 50*time.Millisecond, "BTC", "hot1")
 	}()
@@ -55,7 +57,7 @@ func TestManager_RunRebalanceLoop_NoopWhenDemandBelowTarget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	f := newMgrWithCfg(t, config.Config{HotWalletTargets: map[string]float64{"BTC": 1000}})
-	f.proj.Observe("BTC", 5, time.Now())
+	f.proj.Observe("BTC", decimal.NewFromInt(5), time.Now())
 	go func() {
 		_ = f.mgr.RunRebalanceLoop(ctx, 50*time.Millisecond, "BTC", "hot1")
 	}()

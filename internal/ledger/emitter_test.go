@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
@@ -20,7 +21,7 @@ func TestEmitter_AppendAndDispatch(t *testing.T) {
 	auditCli := clients.NewFakeAudit()
 	e := New(Deps{Outbox: all.Outbox, Ledger: ledgerCli, Audit: auditCli})
 
-	if err := e.Append(ctx, AggBatch, EvBatchClose, "batch.close:1", Payload{BatchID: uuid.New(), NotionalUSD: 50000}); err != nil {
+	if err := e.Append(ctx, AggBatch, EvBatchClose, "batch.close:1", Payload{BatchID: uuid.New(), NotionalUSD: decimal.NewFromInt(50000)}); err != nil {
 		t.Fatal(err)
 	}
 	n, err := e.Dispatch(ctx, 10)
@@ -223,7 +224,9 @@ var errOutbox = errors.New("outbox boom")
 
 type errOutboxStore struct{}
 
-func (errOutboxStore) Append(context.Context, *store.OutboxEntry) (bool, error) { return false, errOutbox }
+func (errOutboxStore) Append(context.Context, *store.OutboxEntry) (bool, error) {
+	return false, errOutbox
+}
 func (errOutboxStore) ListPending(context.Context, int) ([]*store.OutboxEntry, error) {
 	return nil, errOutbox
 }

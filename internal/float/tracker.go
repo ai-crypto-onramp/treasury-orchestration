@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/metrics"
@@ -21,13 +22,13 @@ import (
 
 // Deps bundles the tracker dependencies.
 type Deps struct {
-	Cfg       config.Config
-	Floats    store.FloatStore
-	OnBreach  func(ctx context.Context, fiat string, amount float64, bound string)
+	Cfg      config.Config
+	Floats   store.FloatStore
+	OnBreach func(ctx context.Context, fiat string, amount decimal.Decimal, bound string)
 	// OnAdjust is called after a float position is incremented by an
 	// aggregate fill, so the caller can append a ledger/audit outbox
 	// event.
-	OnAdjust func(ctx context.Context, fiat string, amount float64, batchID uuid.UUID)
+	OnAdjust func(ctx context.Context, fiat string, amount decimal.Decimal, batchID uuid.UUID)
 }
 
 // Tracker manages float positions.
@@ -46,11 +47,11 @@ func (t *Tracker) OnAggregateFill(ctx context.Context, batch *store.Batch, order
 	due := time.Now().UTC().Add(time.Duration(settlementDays) * 24 * time.Hour)
 	_, err := t.deps.Floats.AddFloat(ctx, &store.FloatPosition{
 		FiatCurrency:     fiatCurrency,
-		ShortFiatAmount:   order.NotionalUSD,
-		LongCryptoAmount:  order.TotalFilled,
-		LongCryptoAsset:   cryptoAsset,
-		SettlementDueAt:   due,
-		BatchID:           batch.ID,
+		ShortFiatAmount:  order.NotionalUSD,
+		LongCryptoAmount: order.TotalFilled,
+		LongCryptoAsset:  cryptoAsset,
+		SettlementDueAt:  due,
+		BatchID:          batch.ID,
 	})
 	if err != nil {
 		return err
@@ -79,17 +80,17 @@ func (t *Tracker) enforceBounds(ctx context.Context, fiat string) {
 	if err != nil || pos == nil {
 		return
 	}
-	metrics.FloatUSD.WithLabelValues(fiat).Set(pos.ShortFiatAmount)
-	if t.deps.Cfg.MaxFloatUSD > 0 && pos.ShortFiatAmount > t.deps.Cfg.MaxFloatUSD {
+	metrics.FloatUSD.WithLabelValues(fiat).Set(pos.ShortFiatAmount.InexactFloat64())
+	if t.deps.Cfg.MaxFloatUSD > 0 && pos.ShortFiatAmount.GreaterThan(decimal.NewFromFloat(t.deps.Cfg.MaxFloatUSD)) {
 		metrics.FloatBreach.WithLabelValues(fiat, "max").Inc()
-		log.Printf("float: MAX breach %s amount=%.2f", fiat, pos.ShortFiatAmount)
+		log.Printf("float: MAX breach %s amount=%s", fiat, pos.ShortFiatAmount.String())
 		if t.deps.OnBreach != nil {
 			t.deps.OnBreach(ctx, fiat, pos.ShortFiatAmount, "max")
 		}
 	}
-	if t.deps.Cfg.MinFloatUSD > 0 && pos.ShortFiatAmount < t.deps.Cfg.MinFloatUSD {
+	if t.deps.Cfg.MinFloatUSD > 0 && pos.ShortFiatAmount.LessThan(decimal.NewFromFloat(t.deps.Cfg.MinFloatUSD)) {
 		metrics.FloatBreach.WithLabelValues(fiat, "min").Inc()
-		log.Printf("float: MIN breach %s amount=%.2f", fiat, pos.ShortFiatAmount)
+		log.Printf("float: MIN breach %s amount=%s", fiat, pos.ShortFiatAmount.String())
 		if t.deps.OnBreach != nil {
 			t.deps.OnBreach(ctx, fiat, pos.ShortFiatAmount, "min")
 		}
@@ -112,7 +113,7 @@ func (t *Tracker) SweepMatured(ctx context.Context) (int, error) {
 			log.Printf("float: settle id=%s: %v", p.ID, err)
 			continue
 		}
-		log.Printf("float: swept id=%s fiat=%s amount=%.2f due=%s", p.ID, p.FiatCurrency, p.ShortFiatAmount, p.SettlementDueAt.Format(time.RFC3339))
+		log.Printf("float: swept id=%s fiat=%s amount=%s due=%s", p.ID, p.FiatCurrency, p.ShortFiatAmount.String(), p.SettlementDueAt.Format(time.RFC3339))
 		swept++
 	}
 	if swept > 0 {

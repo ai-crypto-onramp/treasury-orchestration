@@ -9,6 +9,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/metrics"
@@ -45,7 +47,7 @@ func (h *Hedger) OnAggregateFill(ctx context.Context, batch *store.Batch, order 
 		return order, nil
 	}
 	exposure := order.NotionalUSD
-	if exposure <= 0 {
+	if !exposure.GreaterThan(decimal.Zero) {
 		return order, nil
 	}
 	res, err := h.deps.FX.SubmitExposure(ctx, clients.HedgeRequest{
@@ -55,10 +57,10 @@ func (h *Hedger) OnAggregateFill(ctx context.Context, batch *store.Batch, order 
 	}, key)
 	if err != nil {
 		log.Printf("hedge: submit batch=%s: %v", batch.ID, err)
-		metrics.UnhedgedExposure.WithLabelValues(fiatCurrency).Add(exposure)
+		metrics.UnhedgedExposure.WithLabelValues(fiatCurrency).Add(exposure.InexactFloat64())
 		return nil, err
 	}
-	hedged := 0.0
+	hedged := decimal.Decimal{}
 	if res != nil {
 		hedged = res.HedgedNotional
 	}
@@ -66,8 +68,8 @@ func (h *Hedger) OnAggregateFill(ctx context.Context, batch *store.Batch, order 
 	if err != nil {
 		return nil, err
 	}
-	unhedged := exposure - hedged
-	metrics.UnhedgedExposure.WithLabelValues(fiatCurrency).Set(unhedged)
-	log.Printf("hedge: batch=%s fiat=%s exposure=%.2f hedged=%.2f unhedged=%.2f", batch.ID, fiatCurrency, exposure, hedged, unhedged)
+	unhedged := exposure.Sub(hedged)
+	metrics.UnhedgedExposure.WithLabelValues(fiatCurrency).Set(unhedged.InexactFloat64())
+	log.Printf("hedge: batch=%s fiat=%s exposure=%s hedged=%s unhedged=%s", batch.ID, fiatCurrency, exposure.String(), hedged.String(), unhedged.String())
 	return updated, nil
 }

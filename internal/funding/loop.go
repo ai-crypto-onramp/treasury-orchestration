@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // RunRebalanceLoop periodically checks projected demand against the
@@ -38,19 +40,20 @@ func (m *Manager) checkAndRebalance(ctx context.Context, asset, walletID string)
 	if target <= 0 {
 		return
 	}
-	demand := 0.0
+	demand := decimal.Decimal{}
 	if m.deps.Projection != nil {
 		demand = m.deps.Projection.ProjectedDemand(asset)
 	}
 	// If projected demand exceeds the target, top up by the shortfall.
-	shortfall := demand - target
-	if shortfall <= 0 {
+	shortfall := demand.Sub(decimal.NewFromFloat(target))
+	if !shortfall.GreaterThan(decimal.Zero) {
 		return
 	}
-	if shortfall > MaxFundingAmount {
-		shortfall = MaxFundingAmount
+	maxAmt := decimal.NewFromInt(MaxFundingAmount)
+	if shortfall.GreaterThan(maxAmt) {
+		shortfall = maxAmt
 	}
 	if _, err := m.CreateFundingRequest(ctx, walletID, asset, shortfall, "rebalance-loop"); err != nil {
-		log.Printf("rebalance-loop: asset=%s shortfall=%.2f: %v", asset, shortfall, err)
+		log.Printf("rebalance-loop: asset=%s shortfall=%s: %v", asset, shortfall.String(), err)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
@@ -111,7 +112,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 func (s *Scheduler) shouldClose(ctx context.Context, b *store.Batch) CloseReason {
 	sum, _ := s.deps.Memberships.SumNotional(ctx, b.ID)
 	threshold := s.deps.Cfg.BatchThresholdFor(b.AssetPair)
-	if threshold > 0 && sum >= threshold {
+	if threshold > 0 && sum.GreaterThanOrEqual(decimal.NewFromFloat(threshold)) {
 		return ReasonSize
 	}
 	interval := s.deps.Cfg.BatchIntervalDuration(b.AssetPair)
@@ -147,7 +148,7 @@ func (s *Scheduler) close(ctx context.Context, id uuid.UUID, reason CloseReason)
 	}
 	metrics.BatchesClosed.WithLabelValues(b.AssetPair, string(reason)).Inc()
 	metrics.CloseLatency.WithLabelValues(b.AssetPair).Observe(time.Since(updated.OpenedAt).Seconds())
-	log.Printf("scheduler: closed batch=%s pair=%s reason=%s notional=%.2f", id, b.AssetPair, reason, sum)
+	log.Printf("scheduler: closed batch=%s pair=%s reason=%s notional=%s", id, b.AssetPair, reason, sum.String())
 	if s.deps.OnClose != nil {
 		s.deps.OnClose(ctx, updated, reason)
 	}

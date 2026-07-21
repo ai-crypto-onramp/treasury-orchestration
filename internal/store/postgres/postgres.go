@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store/migrations"
@@ -117,9 +118,11 @@ func (s *BatchStore) OpenBatch(ctx context.Context, assetPair string) (*store.Ba
 		 FROM batches WHERE asset_pair=$1 AND status='OPEN' LIMIT 1`, assetPair)
 	var b store.Batch
 	var closedAt time.Time
-	if err := row.Scan(&b.ID, &b.AssetPair, &b.Status, &b.NotionalUSD, &b.OpenedAt, &closedAt); err == nil {
+	var notional string
+	if err := row.Scan(&b.ID, &b.AssetPair, &b.Status, &notional, &b.OpenedAt, &closedAt); err == nil {
 		_ = tx.Commit(ctx)
 		b.ClosedAt = closedAt
+		b.NotionalUSD, _ = decimal.NewFromString(notional)
 		return &b, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
@@ -146,13 +149,15 @@ func (s *BatchStore) GetBatch(ctx context.Context, id uuid.UUID) (*store.Batch, 
 		 FROM batches WHERE id=$1`, id)
 	var b store.Batch
 	var closedAt time.Time
-	if err := row.Scan(&b.ID, &b.AssetPair, &b.Status, &b.NotionalUSD, &b.OpenedAt, &closedAt); err != nil {
+	var notional string
+	if err := row.Scan(&b.ID, &b.AssetPair, &b.Status, &notional, &b.OpenedAt, &closedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, err
 	}
 	b.ClosedAt = closedAt
+	b.NotionalUSD, _ = decimal.NewFromString(notional)
 	return &b, nil
 }
 
@@ -181,10 +186,12 @@ func (s *BatchStore) ListBatches(ctx context.Context, from, to time.Time) ([]*st
 	for rows.Next() {
 		var b store.Batch
 		var closedAt time.Time
-		if err := rows.Scan(&b.ID, &b.AssetPair, &b.Status, &b.NotionalUSD, &b.OpenedAt, &closedAt); err != nil {
+		var notional string
+		if err := rows.Scan(&b.ID, &b.AssetPair, &b.Status, &notional, &b.OpenedAt, &closedAt); err != nil {
 			return nil, err
 		}
 		b.ClosedAt = closedAt
+		b.NotionalUSD, _ = decimal.NewFromString(notional)
 		out = append(out, &b)
 	}
 	return out, rows.Err()
@@ -202,10 +209,12 @@ func (s *BatchStore) ListOpenBatches(ctx context.Context) ([]*store.Batch, error
 	for rows.Next() {
 		var b store.Batch
 		var closedAt time.Time
-		if err := rows.Scan(&b.ID, &b.AssetPair, &b.Status, &b.NotionalUSD, &b.OpenedAt, &closedAt); err != nil {
+		var notional string
+		if err := rows.Scan(&b.ID, &b.AssetPair, &b.Status, &notional, &b.OpenedAt, &closedAt); err != nil {
 			return nil, err
 		}
 		b.ClosedAt = closedAt
+		b.NotionalUSD, _ = decimal.NewFromString(notional)
 		out = append(out, &b)
 	}
 	return out, rows.Err()
@@ -221,12 +230,14 @@ func (s *BatchStore) UpdateBatchStatus(ctx context.Context, id uuid.UUID, from, 
 		`SELECT id, asset_pair, status, notional_usd, opened_at, COALESCE(closed_at, now())
 		 FROM batches WHERE id=$1 FOR UPDATE`, id)
 	var b store.Batch
-	if err := row.Scan(&b.ID, &b.AssetPair, &b.Status, &b.NotionalUSD, &b.OpenedAt, &b.ClosedAt); err != nil {
+	var notional string
+	if err := row.Scan(&b.ID, &b.AssetPair, &b.Status, &notional, &b.OpenedAt, &b.ClosedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, false, store.ErrNotFound
 		}
 		return nil, false, err
 	}
+	b.NotionalUSD, _ = decimal.NewFromString(notional)
 	if b.Status != from {
 		return nil, false, nil
 	}
@@ -243,7 +254,7 @@ func (s *BatchStore) UpdateBatchStatus(ctx context.Context, id uuid.UUID, from, 
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE batches SET status=$2, notional_usd=$3, closed_at=$4, updated_at=now() WHERE id=$1`,
-		id, string(b.Status), b.NotionalUSD, closedAt); err != nil {
+		id, string(b.Status), b.NotionalUSD.String(), closedAt); err != nil {
 		return nil, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -253,8 +264,8 @@ func (s *BatchStore) UpdateBatchStatus(ctx context.Context, id uuid.UUID, from, 
 	return &b, true, nil
 }
 
-func (s *BatchStore) SetBatchNotional(ctx context.Context, id uuid.UUID, notional float64) error {
-	_, err := s.db.Exec(ctx, `UPDATE batches SET notional_usd=$2, updated_at=now() WHERE id=$1`, id, notional)
+func (s *BatchStore) SetBatchNotional(ctx context.Context, id uuid.UUID, notional decimal.Decimal) error {
+	_, err := s.db.Exec(ctx, `UPDATE batches SET notional_usd=$2, updated_at=now() WHERE id=$1`, id, notional.String())
 	return err
 }
 
@@ -268,7 +279,7 @@ func (s *MembershipStore) AddMembership(ctx context.Context, m *store.Membership
 		`INSERT INTO batch_memberships (id, batch_id, tx_id, amount, asset, fiat_currency, notional_usd, user_id, created_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,now()))
 		 ON CONFLICT (tx_id) DO NOTHING`,
-		id, m.BatchID, m.TxID, m.Amount, m.Asset, m.FiatCurrency, m.NotionalUSD, m.UserID, m.CreatedAt)
+		id, m.BatchID, m.TxID, m.Amount.String(), m.Asset, m.FiatCurrency, m.NotionalUSD.String(), m.UserID, m.CreatedAt)
 	if err != nil {
 		return false, err
 	}
@@ -286,23 +297,26 @@ func (s *MembershipStore) ListMemberships(ctx context.Context, batchID uuid.UUID
 	var out []*store.Membership
 	for rows.Next() {
 		var m store.Membership
-		if err := rows.Scan(&m.ID, &m.BatchID, &m.TxID, &m.Amount, &m.Asset, &m.FiatCurrency, &m.NotionalUSD, &m.UserID, &m.CreatedAt); err != nil {
+		var amount, notional string
+		if err := rows.Scan(&m.ID, &m.BatchID, &m.TxID, &amount, &m.Asset, &m.FiatCurrency, &notional, &m.UserID, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		m.Amount, _ = decimal.NewFromString(amount)
+		m.NotionalUSD, _ = decimal.NewFromString(notional)
 		out = append(out, &m)
 	}
 	return out, rows.Err()
 }
 
-func (s *MembershipStore) SumNotional(ctx context.Context, batchID uuid.UUID) (float64, error) {
-	var sum *float64
-	if err := s.db.QueryRow(ctx, `SELECT COALESCE(SUM(notional_usd),0) FROM batch_memberships WHERE batch_id=$1`, batchID).Scan(&sum); err != nil {
-		return 0, err
+func (s *MembershipStore) SumNotional(ctx context.Context, batchID uuid.UUID) (decimal.Decimal, error) {
+	var sum *string
+	if err := s.db.QueryRow(ctx, `SELECT COALESCE(SUM(notional_usd),0)::text FROM batch_memberships WHERE batch_id=$1`, batchID).Scan(&sum); err != nil {
+		return decimal.Decimal{}, err
 	}
 	if sum == nil {
-		return 0, nil
+		return decimal.Decimal{}, nil
 	}
-	return *sum, nil
+	return decimal.NewFromString(*sum)
 }
 
 func (s *MembershipStore) ExistsByTxID(ctx context.Context, txID string) (bool, error) {
@@ -336,7 +350,7 @@ func (s *AggregateOrderStore) CreateOrder(ctx context.Context, o *store.Aggregat
 		`INSERT INTO aggregate_orders (id, batch_id, asset_pair, side, notional_usd, venue_routes, fill_price, total_filled, hedged_notional, status, created_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
 		 ON CONFLICT (batch_id) DO NOTHING`,
-		o.ID, o.BatchID, o.AssetPair, side, o.NotionalUSD, routesJSON, o.FillPrice, o.TotalFilled, o.HedgedNotional, status)
+		o.ID, o.BatchID, o.AssetPair, side, o.NotionalUSD.String(), routesJSON, o.FillPrice.String(), o.TotalFilled.String(), o.HedgedNotional.String(), status)
 	if err != nil {
 		return nil, err
 	}
@@ -350,12 +364,17 @@ func (s *AggregateOrderStore) GetOrderByBatch(ctx context.Context, batchID uuid.
 	var o store.AggregateOrder
 	var routesJSON []byte
 	var settledAt time.Time
-	if err := row.Scan(&o.ID, &o.BatchID, &o.AssetPair, &o.Side, &o.NotionalUSD, &routesJSON, &o.FillPrice, &o.TotalFilled, &o.HedgedNotional, &o.Status, &o.CreatedAt, &settledAt); err != nil {
+	var notional, fillPrice, totalFilled, hedgedNotional string
+	if err := row.Scan(&o.ID, &o.BatchID, &o.AssetPair, &o.Side, &notional, &routesJSON, &fillPrice, &totalFilled, &hedgedNotional, &o.Status, &o.CreatedAt, &settledAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, err
 	}
+	o.NotionalUSD, _ = decimal.NewFromString(notional)
+	o.FillPrice, _ = decimal.NewFromString(fillPrice)
+	o.TotalFilled, _ = decimal.NewFromString(totalFilled)
+	o.HedgedNotional, _ = decimal.NewFromString(hedgedNotional)
 	_ = json.Unmarshal(routesJSON, &o.VenueRoutes)
 	o.SettledAt = settledAt
 	return &o, nil
@@ -379,9 +398,14 @@ func (s *AggregateOrderStore) ListOrders(ctx context.Context, status string) ([]
 		var o store.AggregateOrder
 		var routesJSON []byte
 		var settledAt time.Time
-		if err := rows.Scan(&o.ID, &o.BatchID, &o.AssetPair, &o.Side, &o.NotionalUSD, &routesJSON, &o.FillPrice, &o.TotalFilled, &o.HedgedNotional, &o.Status, &o.CreatedAt, &settledAt); err != nil {
+		var notional, fillPrice, totalFilled, hedgedNotional string
+		if err := rows.Scan(&o.ID, &o.BatchID, &o.AssetPair, &o.Side, &notional, &routesJSON, &fillPrice, &totalFilled, &hedgedNotional, &o.Status, &o.CreatedAt, &settledAt); err != nil {
 			return nil, err
 		}
+		o.NotionalUSD, _ = decimal.NewFromString(notional)
+		o.FillPrice, _ = decimal.NewFromString(fillPrice)
+		o.TotalFilled, _ = decimal.NewFromString(totalFilled)
+		o.HedgedNotional, _ = decimal.NewFromString(hedgedNotional)
 		_ = json.Unmarshal(routesJSON, &o.VenueRoutes)
 		o.SettledAt = settledAt
 		out = append(out, &o)
@@ -389,20 +413,20 @@ func (s *AggregateOrderStore) ListOrders(ctx context.Context, status string) ([]
 	return out, rows.Err()
 }
 
-func (s *AggregateOrderStore) UpdateOrderFill(ctx context.Context, batchID uuid.UUID, fillPrice, totalFilled float64, venueRoutes []store.VenueRoute) (*store.AggregateOrder, error) {
+func (s *AggregateOrderStore) UpdateOrderFill(ctx context.Context, batchID uuid.UUID, fillPrice, totalFilled decimal.Decimal, venueRoutes []store.VenueRoute) (*store.AggregateOrder, error) {
 	routesJSON, _ := json.Marshal(venueRoutes)
 	if _, err := s.db.Exec(ctx,
 		`UPDATE aggregate_orders SET fill_price=$2, total_filled=$3, venue_routes=$4, updated_at=now() WHERE batch_id=$1`,
-		batchID, fillPrice, totalFilled, routesJSON); err != nil {
+		batchID, fillPrice.String(), totalFilled.String(), routesJSON); err != nil {
 		return nil, err
 	}
 	return s.GetOrderByBatch(ctx, batchID)
 }
 
-func (s *AggregateOrderStore) SettleOrder(ctx context.Context, batchID uuid.UUID, hedgedNotional float64) (*store.AggregateOrder, error) {
+func (s *AggregateOrderStore) SettleOrder(ctx context.Context, batchID uuid.UUID, hedgedNotional decimal.Decimal) (*store.AggregateOrder, error) {
 	if _, err := s.db.Exec(ctx,
 		`UPDATE aggregate_orders SET status='SETTLED', hedged_notional=$2, settled_at=now(), updated_at=now() WHERE batch_id=$1`,
-		batchID, hedgedNotional); err != nil {
+		batchID, hedgedNotional.String()); err != nil {
 		return nil, err
 	}
 	return s.GetOrderByBatch(ctx, batchID)
@@ -422,7 +446,7 @@ func (s *FundingStore) CreateFunding(ctx context.Context, f *store.FundingReques
 	if err := s.db.QueryRow(ctx,
 		`INSERT INTO funding_requests (id, wallet_id, asset, amount, status, source_venue, created_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,now()) RETURNING created_at`,
-		id, f.WalletID, f.Asset, f.Amount, status, f.SourceVenue).Scan(&createdAt); err != nil {
+		id, f.WalletID, f.Asset, f.Amount.String(), status, f.SourceVenue).Scan(&createdAt); err != nil {
 		return nil, err
 	}
 	c := *f
@@ -437,12 +461,14 @@ func (s *FundingStore) GetFunding(ctx context.Context, id uuid.UUID) (*store.Fun
 		`SELECT id, wallet_id, asset, amount, status, source_venue, created_at, COALESCE(completed_at, now())
 		 FROM funding_requests WHERE id=$1`, id)
 	var f store.FundingRequest
-	if err := row.Scan(&f.ID, &f.WalletID, &f.Asset, &f.Amount, &f.Status, &f.SourceVenue, &f.CreatedAt, &f.CompletedAt); err != nil {
+	var amount string
+	if err := row.Scan(&f.ID, &f.WalletID, &f.Asset, &amount, &f.Status, &f.SourceVenue, &f.CreatedAt, &f.CompletedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, err
 	}
+	f.Amount, _ = decimal.NewFromString(amount)
 	return &f, nil
 }
 
@@ -471,9 +497,11 @@ func (s *FundingStore) ListFunding(ctx context.Context, status string) ([]*store
 	var out []*store.FundingRequest
 	for rows.Next() {
 		var f store.FundingRequest
-		if err := rows.Scan(&f.ID, &f.WalletID, &f.Asset, &f.Amount, &f.Status, &f.SourceVenue, &f.CreatedAt, &f.CompletedAt); err != nil {
+		var amount string
+		if err := rows.Scan(&f.ID, &f.WalletID, &f.Asset, &amount, &f.Status, &f.SourceVenue, &f.CreatedAt, &f.CompletedAt); err != nil {
 			return nil, err
 		}
+		f.Amount, _ = decimal.NewFromString(amount)
 		out = append(out, &f)
 	}
 	return out, rows.Err()
@@ -495,7 +523,7 @@ func (s *FloatStore) AddFloat(ctx context.Context, p *store.FloatPosition) (*sto
 	if err := row.Scan(&id); err == nil {
 		if _, err := tx.Exec(ctx,
 			`UPDATE float_positions SET short_fiat_amount=short_fiat_amount+$2, long_crypto_amount=long_crypto_amount+$3, long_crypto_asset=$4, settlement_due_at=$5, updated_at=now() WHERE id=$1`,
-			id, p.ShortFiatAmount, p.LongCryptoAmount, p.LongCryptoAsset, p.SettlementDueAt); err != nil {
+			id, p.ShortFiatAmount.String(), p.LongCryptoAmount.String(), p.LongCryptoAsset, p.SettlementDueAt); err != nil {
 			return nil, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -509,7 +537,7 @@ func (s *FloatStore) AddFloat(ctx context.Context, p *store.FloatPosition) (*sto
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO float_positions (id, fiat_currency, short_fiat_amount, long_crypto_amount, long_crypto_asset, settlement_due_at, settled, batch_id, created_at, updated_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,false,$7,now(),now())`,
-		newID, p.FiatCurrency, p.ShortFiatAmount, p.LongCryptoAmount, p.LongCryptoAsset, p.SettlementDueAt, p.BatchID); err != nil {
+		newID, p.FiatCurrency, p.ShortFiatAmount.String(), p.LongCryptoAmount.String(), p.LongCryptoAsset, p.SettlementDueAt, p.BatchID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -521,20 +549,23 @@ func (s *FloatStore) AddFloat(ctx context.Context, p *store.FloatPosition) (*sto
 
 func (s *FloatStore) GetFloat(ctx context.Context, fiatCurrency string) (*store.FloatPosition, error) {
 	row := s.db.QueryRow(ctx,
-		`SELECT COALESCE(SUM(short_fiat_amount),0), COALESCE(SUM(long_crypto_amount),0),
+		`SELECT COALESCE(SUM(short_fiat_amount),0)::text, COALESCE(SUM(long_crypto_amount),0)::text,
 		        COALESCE(MAX(long_crypto_asset),''), COALESCE(MAX(settlement_due_at),now())
 		 FROM float_positions WHERE fiat_currency=$1`, fiatCurrency)
 	var p store.FloatPosition
+	var shortFiat, longCrypto string
 	p.FiatCurrency = fiatCurrency
-	if err := row.Scan(&p.ShortFiatAmount, &p.LongCryptoAmount, &p.LongCryptoAsset, &p.SettlementDueAt); err != nil {
+	if err := row.Scan(&shortFiat, &longCrypto, &p.LongCryptoAsset, &p.SettlementDueAt); err != nil {
 		return nil, err
 	}
+	p.ShortFiatAmount, _ = decimal.NewFromString(shortFiat)
+	p.LongCryptoAmount, _ = decimal.NewFromString(longCrypto)
 	return &p, nil
 }
 
 func (s *FloatStore) ListFloat(ctx context.Context) ([]*store.FloatPosition, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT fiat_currency, COALESCE(SUM(short_fiat_amount),0), COALESCE(SUM(long_crypto_amount),0),
+		`SELECT fiat_currency, COALESCE(SUM(short_fiat_amount),0)::text, COALESCE(SUM(long_crypto_amount),0)::text,
 		        COALESCE(MAX(long_crypto_asset),''), COALESCE(MAX(settlement_due_at),now())
 		 FROM float_positions GROUP BY fiat_currency ORDER BY fiat_currency ASC`)
 	if err != nil {
@@ -544,9 +575,12 @@ func (s *FloatStore) ListFloat(ctx context.Context) ([]*store.FloatPosition, err
 	var out []*store.FloatPosition
 	for rows.Next() {
 		var p store.FloatPosition
-		if err := rows.Scan(&p.FiatCurrency, &p.ShortFiatAmount, &p.LongCryptoAmount, &p.LongCryptoAsset, &p.SettlementDueAt); err != nil {
+		var shortFiat, longCrypto string
+		if err := rows.Scan(&p.FiatCurrency, &shortFiat, &longCrypto, &p.LongCryptoAsset, &p.SettlementDueAt); err != nil {
 			return nil, err
 		}
+		p.ShortFiatAmount, _ = decimal.NewFromString(shortFiat)
+		p.LongCryptoAmount, _ = decimal.NewFromString(longCrypto)
 		out = append(out, &p)
 	}
 	return out, rows.Err()
@@ -554,7 +588,7 @@ func (s *FloatStore) ListFloat(ctx context.Context) ([]*store.FloatPosition, err
 
 func (s *FloatStore) ListMaturedFloat(ctx context.Context, before time.Time) ([]*store.FloatPosition, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT id, fiat_currency, short_fiat_amount, long_crypto_amount, long_crypto_asset, settlement_due_at, settled, COALESCE(batch_id,uuid_nil()), created_at, updated_at
+		`SELECT id, fiat_currency, short_fiat_amount::text, long_crypto_amount::text, long_crypto_asset, settlement_due_at, settled, COALESCE(batch_id,uuid_nil()), created_at, updated_at
 		 FROM float_positions WHERE settled=false AND settlement_due_at <= $1 ORDER BY id ASC`, before)
 	if err != nil {
 		return nil, err
@@ -563,9 +597,12 @@ func (s *FloatStore) ListMaturedFloat(ctx context.Context, before time.Time) ([]
 	var out []*store.FloatPosition
 	for rows.Next() {
 		var p store.FloatPosition
-		if err := rows.Scan(&p.ID, &p.FiatCurrency, &p.ShortFiatAmount, &p.LongCryptoAmount, &p.LongCryptoAsset, &p.SettlementDueAt, &p.Settled, &p.BatchID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var shortFiat, longCrypto string
+		if err := rows.Scan(&p.ID, &p.FiatCurrency, &shortFiat, &longCrypto, &p.LongCryptoAsset, &p.SettlementDueAt, &p.Settled, &p.BatchID, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
+		p.ShortFiatAmount, _ = decimal.NewFromString(shortFiat)
+		p.LongCryptoAmount, _ = decimal.NewFromString(longCrypto)
 		out = append(out, &p)
 	}
 	return out, rows.Err()
@@ -575,11 +612,14 @@ func (s *FloatStore) SettleFloat(ctx context.Context, id uuid.UUID) (*store.Floa
 	if _, err := s.db.Exec(ctx, `UPDATE float_positions SET settled=true, short_fiat_amount=0, long_crypto_amount=0, updated_at=now() WHERE id=$1`, id); err != nil {
 		return nil, err
 	}
-	row := s.db.QueryRow(ctx, `SELECT id, fiat_currency, short_fiat_amount, long_crypto_amount, long_crypto_asset, settlement_due_at, settled, COALESCE(batch_id,uuid_nil()), created_at, updated_at FROM float_positions WHERE id=$1`, id)
+	row := s.db.QueryRow(ctx, `SELECT id, fiat_currency, short_fiat_amount::text, long_crypto_amount::text, long_crypto_asset, settlement_due_at, settled, COALESCE(batch_id,uuid_nil()), created_at, updated_at FROM float_positions WHERE id=$1`, id)
 	var p store.FloatPosition
-	if err := row.Scan(&p.ID, &p.FiatCurrency, &p.ShortFiatAmount, &p.LongCryptoAmount, &p.LongCryptoAsset, &p.SettlementDueAt, &p.Settled, &p.BatchID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	var shortFiat, longCrypto string
+	if err := row.Scan(&p.ID, &p.FiatCurrency, &shortFiat, &longCrypto, &p.LongCryptoAsset, &p.SettlementDueAt, &p.Settled, &p.BatchID, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
+	p.ShortFiatAmount, _ = decimal.NewFromString(shortFiat)
+	p.LongCryptoAmount, _ = decimal.NewFromString(longCrypto)
 	return &p, nil
 }
 
@@ -597,7 +637,7 @@ func (s *RebalancingStore) CreateJob(ctx context.Context, j *store.RebalancingJo
 	if err := s.db.QueryRow(ctx,
 		`INSERT INTO rebalancing_jobs (id, from_ref, to_ref, asset, amount, status, reason, created_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,now()) RETURNING created_at`,
-		id, j.FromRef, j.ToRef, j.Asset, j.Amount, status, j.Reason).Scan(&createdAt); err != nil {
+		id, j.FromRef, j.ToRef, j.Asset, j.Amount.String(), status, j.Reason).Scan(&createdAt); err != nil {
 		return nil, err
 	}
 	c := *j
@@ -623,9 +663,11 @@ func (s *RebalancingStore) ListJobs(ctx context.Context, status string) ([]*stor
 	var out []*store.RebalancingJob
 	for rows.Next() {
 		var j store.RebalancingJob
-		if err := rows.Scan(&j.ID, &j.FromRef, &j.ToRef, &j.Asset, &j.Amount, &j.Status, &j.Reason, &j.CreatedAt, &j.CompletedAt); err != nil {
+		var amount string
+		if err := rows.Scan(&j.ID, &j.FromRef, &j.ToRef, &j.Asset, &amount, &j.Status, &j.Reason, &j.CreatedAt, &j.CompletedAt); err != nil {
 			return nil, err
 		}
+		j.Amount, _ = decimal.NewFromString(amount)
 		out = append(out, &j)
 	}
 	return out, rows.Err()

@@ -13,14 +13,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/batch"
+	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
+	"github.com/ai-crypto-onramp/treasury-orchestration/internal/float"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/funding"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/idempotency"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/projection"
-	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
-	"github.com/ai-crypto-onramp/treasury-orchestration/internal/float"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/store/memstore"
 )
@@ -80,7 +81,7 @@ func TestBatches_ListAndCreate(t *testing.T) {
 	ctx := context.Background()
 	d, all, _ := newDeps(t)
 	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
-	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", Asset: "BTC", FiatCurrency: "USD", NotionalUSD: 1000})
+	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", Asset: "BTC", FiatCurrency: "USD", NotionalUSD: decimal.NewFromInt(1000)})
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/batches")
@@ -103,7 +104,7 @@ func TestBatchByID_GetWithMemberships(t *testing.T) {
 	ctx := context.Background()
 	d, all, _ := newDeps(t)
 	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
-	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", Asset: "BTC", FiatCurrency: "USD", NotionalUSD: 1000})
+	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", Asset: "BTC", FiatCurrency: "USD", NotionalUSD: decimal.NewFromInt(1000)})
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/batches/" + b.ID.String())
@@ -114,9 +115,9 @@ func TestBatchByID_GetWithMemberships(t *testing.T) {
 		t.Fatalf("code=%d", resp.StatusCode)
 	}
 	var out struct {
-		Batch      *store.Batch            `json:"batch"`
-		Memberships []*store.Membership    `json:"memberships"`
-		Order      *store.AggregateOrder   `json:"order"`
+		Batch       *store.Batch          `json:"batch"`
+		Memberships []*store.Membership   `json:"memberships"`
+		Order       *store.AggregateOrder `json:"order"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	if out.Batch == nil || out.Batch.ID != b.ID {
@@ -162,7 +163,7 @@ func TestBatchByID_Close(t *testing.T) {
 func TestFloat_Get(t *testing.T) {
 	ctx := context.Background()
 	d, all, _ := newDeps(t)
-	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 1234, LongCryptoAmount: 0.02, LongCryptoAsset: "BTC"})
+	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(1234), LongCryptoAmount: decimal.NewFromFloat(0.02), LongCryptoAsset: "BTC"})
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/float/USD")
@@ -174,8 +175,8 @@ func TestFloat_Get(t *testing.T) {
 	}
 	var pos store.FloatPosition
 	_ = json.NewDecoder(resp.Body).Decode(&pos)
-	if pos.ShortFiatAmount != 1234 {
-		t.Fatalf("short=%f want 1234", pos.ShortFiatAmount)
+	if !pos.ShortFiatAmount.Equal(decimal.NewFromInt(1234)) {
+		t.Fatalf("short=%s want 1234", pos.ShortFiatAmount.String())
 	}
 }
 
@@ -215,8 +216,8 @@ func TestFunding_Create_InvalidAmount(t *testing.T) {
 func TestFunding_List(t *testing.T) {
 	ctx := context.Background()
 	d, _, _ := newDeps(t)
-	_, _ = d.Funding.CreateFundingRequest(ctx, "h1", "BTC", 1, "")
-	_, _ = d.Funding.CreateFundingRequest(ctx, "h2", "ETH", 2, "")
+	_, _ = d.Funding.CreateFundingRequest(ctx, "h1", "BTC", decimal.NewFromInt(1), "")
+	_, _ = d.Funding.CreateFundingRequest(ctx, "h2", "ETH", decimal.NewFromInt(2), "")
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/funding-requests?status=" + string(store.FundingCompleted))
@@ -238,7 +239,7 @@ func TestFunding_List(t *testing.T) {
 func TestRebalancingJobs_List(t *testing.T) {
 	ctx := context.Background()
 	d, _, _ := newDeps(t)
-	_, _ = d.Funding.Rebalance(ctx, "a", "b", "BTC", 1, "drift")
+	_, _ = d.Funding.Rebalance(ctx, "a", "b", "BTC", decimal.NewFromInt(1), "drift")
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/rebalancing-jobs")
@@ -754,10 +755,10 @@ func (e errOrderStore) GetOrderByBatch(context.Context, uuid.UUID) (*store.Aggre
 func (e errOrderStore) ListOrders(context.Context, string) ([]*store.AggregateOrder, error) {
 	return nil, e.err
 }
-func (e errOrderStore) UpdateOrderFill(context.Context, uuid.UUID, float64, float64, []store.VenueRoute) (*store.AggregateOrder, error) {
+func (e errOrderStore) UpdateOrderFill(context.Context, uuid.UUID, decimal.Decimal, decimal.Decimal, []store.VenueRoute) (*store.AggregateOrder, error) {
 	return nil, e.err
 }
-func (e errOrderStore) SettleOrder(context.Context, uuid.UUID, float64) (*store.AggregateOrder, error) {
+func (e errOrderStore) SettleOrder(context.Context, uuid.UUID, decimal.Decimal) (*store.AggregateOrder, error) {
 	return nil, e.err
 }
 
@@ -770,8 +771,8 @@ func (e errMembershipStore) AddMembership(context.Context, *store.Membership) (b
 func (e errMembershipStore) ListMemberships(context.Context, uuid.UUID) ([]*store.Membership, error) {
 	return nil, e.err
 }
-func (e errMembershipStore) SumNotional(context.Context, uuid.UUID) (float64, error) {
-	return 0, e.err
+func (e errMembershipStore) SumNotional(context.Context, uuid.UUID) (decimal.Decimal, error) {
+	return decimal.Decimal{}, e.err
 }
 func (e errMembershipStore) ExistsByTxID(context.Context, string) (bool, error) {
 	return false, e.err
@@ -797,7 +798,7 @@ func TestBatchMemberships(t *testing.T) {
 	ctx := context.Background()
 	d, all, _ := newDeps(t)
 	b, _ := all.Batch.OpenBatch(ctx, "BTC/USD")
-	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", Asset: "BTC", FiatCurrency: "USD", NotionalUSD: 1000})
+	_, _ = all.Membership.AddMembership(ctx, &store.Membership{BatchID: b.ID, TxID: "t1", Asset: "BTC", FiatCurrency: "USD", NotionalUSD: decimal.NewFromInt(1000)})
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/batches/" + b.ID.String() + "/memberships")
@@ -819,8 +820,8 @@ func TestBatchMemberships(t *testing.T) {
 func TestFloatList(t *testing.T) {
 	ctx := context.Background()
 	d, all, _ := newDeps(t)
-	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: 1000, LongCryptoAmount: 0.01, LongCryptoAsset: "BTC"})
-	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "EUR", ShortFiatAmount: 500, LongCryptoAmount: 0.005, LongCryptoAsset: "BTC"})
+	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "USD", ShortFiatAmount: decimal.NewFromInt(1000), LongCryptoAmount: decimal.NewFromFloat(0.01), LongCryptoAsset: "BTC"})
+	_, _ = all.Float.AddFloat(ctx, &store.FloatPosition{FiatCurrency: "EUR", ShortFiatAmount: decimal.NewFromInt(500), LongCryptoAmount: decimal.NewFromFloat(0.005), LongCryptoAsset: "BTC"})
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/float")
@@ -844,8 +845,8 @@ func TestAggregateOrdersList(t *testing.T) {
 	d, all, _ := newDeps(t)
 	batchID1, _ := uuid.NewV7()
 	batchID2, _ := uuid.NewV7()
-	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: batchID1, AssetPair: "BTC/USD", NotionalUSD: 50000, Status: store.AggregateExecuting})
-	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: batchID2, AssetPair: "ETH/USD", NotionalUSD: 30000, Status: store.AggregateSettled})
+	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: batchID1, AssetPair: "BTC/USD", NotionalUSD: decimal.NewFromInt(50000), Status: store.AggregateExecuting})
+	_, _ = all.Order.CreateOrder(ctx, &store.AggregateOrder{BatchID: batchID2, AssetPair: "ETH/USD", NotionalUSD: decimal.NewFromInt(30000), Status: store.AggregateSettled})
 	srv := httptest.NewServer(NewRouter(d))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/aggregate-orders")
@@ -872,7 +873,6 @@ func TestAggregateOrdersList(t *testing.T) {
 	}
 }
 
-
 var errAPI = errors.New("api store boom")
 
 type errBatchStore struct{ err error }
@@ -890,7 +890,9 @@ func (e errBatchStore) ListOpenBatches(context.Context) ([]*store.Batch, error) 
 func (e errBatchStore) UpdateBatchStatus(context.Context, uuid.UUID, store.BatchStatus, store.BatchStatus, func(*store.Batch)) (*store.Batch, bool, error) {
 	return nil, false, e.err
 }
-func (e errBatchStore) SetBatchNotional(context.Context, uuid.UUID, float64) error { return e.err }
+func (e errBatchStore) SetBatchNotional(context.Context, uuid.UUID, decimal.Decimal) error {
+	return e.err
+}
 
 type errFundingStore struct{ err error }
 

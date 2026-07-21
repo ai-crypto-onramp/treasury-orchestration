@@ -4,23 +4,25 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // VenueRoute describes one slice of an aggregate fill returned by
 // liquidity-routing. Mirrors store.VenueRoute but kept here to avoid an
 // import cycle with the store package in the clients layer.
 type VenueRoute struct {
-	Venue string  `json:"venue"`
-	Share float64 `json:"share"`
-	Price float64 `json:"price"`
+	Venue string          `json:"venue"`
+	Share decimal.Decimal `json:"share"`
+	Price decimal.Decimal `json:"price"`
 }
 
 // FillResult is the aggregate parent-order fill returned by
 // liquidity-routing.
 type FillResult struct {
-	FillPrice   float64     `json:"fill_price"`
-	TotalFilled float64    `json:"total_filled"`
-	VenueRoutes []VenueRoute `json:"venue_routes"`
+	FillPrice   decimal.Decimal `json:"fill_price"`
+	TotalFilled decimal.Decimal `json:"total_filled"`
+	VenueRoutes []VenueRoute    `json:"venue_routes"`
 }
 
 // LiquidityRouting is the client interface for the liquidity-routing
@@ -34,10 +36,10 @@ type LiquidityRouting interface {
 // AggregateOrderRequest is the parent-order payload sent to
 // liquidity-routing.
 type AggregateOrderRequest struct {
-	AssetPair   string  `json:"asset_pair"`
-	Side        string  `json:"side"`
-	NotionalUSD float64 `json:"notional_usd"`
-	TotalTarget float64 `json:"total_target"`
+	AssetPair   string          `json:"asset_pair"`
+	Side        string          `json:"side"`
+	NotionalUSD decimal.Decimal `json:"notional_usd"`
+	TotalTarget decimal.Decimal `json:"total_target"`
 }
 
 // --- Fake ---
@@ -87,7 +89,7 @@ func (f *FakeLiquidityRouting) SubmitAggregate(_ context.Context, req AggregateO
 	f.keys[key] = true
 	fill := f.fill
 	if fill.VenueRoutes == nil {
-		fill.VenueRoutes = []VenueRoute{{Venue: "primary", Share: 1.0, Price: fill.FillPrice}}
+		fill.VenueRoutes = []VenueRoute{{Venue: "primary", Share: decimal.NewFromInt(1), Price: fill.FillPrice}}
 	}
 	return &fill, nil
 }

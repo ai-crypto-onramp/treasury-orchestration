@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/batch"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/float"
@@ -224,6 +225,7 @@ func (d *Deps) handleAggregateOrders(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /v1/funding-requests, GET /v1/funding-requests?status=
+// BREAKING CHANGE: amount is now accepted as a decimal string in JSON.
 func (d *Deps) handleFunding(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		status := r.URL.Query().Get("status")
@@ -240,10 +242,10 @@ func (d *Deps) handleFunding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		WalletID    string `json:"wallet_id"`
-		Asset       string `json:"asset"`
-		Amount      float64 `json:"amount"`
-		SourceVenue string `json:"source_venue"`
+		WalletID    string          `json:"wallet_id"`
+		Asset       string          `json:"asset"`
+		Amount      decimal.Decimal `json:"amount"`
+		SourceVenue string          `json:"source_venue"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "malformed json")

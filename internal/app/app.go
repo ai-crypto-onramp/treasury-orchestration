@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/aggregate"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/api"
@@ -80,14 +81,14 @@ func Build(cfg config.Config) (*Server, error) {
 	}
 
 	var (
-		batchStore    store.BatchStore
+		batchStore      store.BatchStore
 		membershipStore store.MembershipStore
-		orderStore    store.AggregateOrderStore
-		fundingStore  store.FundingStore
-		floatStore    store.FloatStore
-		rebalStore    store.RebalancingStore
-		outboxStore   store.OutboxStore
-		db            *postgres.DB
+		orderStore      store.AggregateOrderStore
+		fundingStore    store.FundingStore
+		floatStore      store.FloatStore
+		rebalStore      store.RebalancingStore
+		outboxStore     store.OutboxStore
+		db              *postgres.DB
 	)
 
 	if cfg.DBURL != "" {
@@ -135,7 +136,7 @@ func Build(cfg config.Config) (*Server, error) {
 	floatTracker := float.New(float.Deps{
 		Cfg:    cfg,
 		Floats: floatStore,
-		OnAdjust: func(ctx context.Context, fiat string, amount float64, batchID uuid.UUID) {
+		OnAdjust: func(ctx context.Context, fiat string, amount decimal.Decimal, batchID uuid.UUID) {
 			_ = emitter.Append(ctx, ledger.AggFloat, ledger.EvFloatAdjust, ledger.Key(ledger.AggFloat, ledger.EvFloatAdjust, batchID), ledger.Payload{
 				BatchID:      batchID,
 				NotionalUSD:  amount,
@@ -151,7 +152,7 @@ func Build(cfg config.Config) (*Server, error) {
 		Orders:           orderStore,
 		Liquidity:        clients_.liquidity,
 		Idem:             idem,
-		ExpectedPriceFor: func(assetPair string) float64 { return 50000 },
+		ExpectedPriceFor: func(assetPair string) decimal.Decimal { return decimal.NewFromInt(50000) },
 		OnFill: func(ctx context.Context, b *store.Batch, o *store.AggregateOrder) {
 			fiat := fiatOf(b.AssetPair)
 			cryptoAsset := cryptoOf(b.AssetPair)
@@ -394,7 +395,7 @@ func buildLiquidity(cfg config.Config, devMode bool) (clients.LiquidityRouting, 
 	if !devMode {
 		return nil, errors.New("LIQUIDITY_ROUTING_URL not set and DEV_MODE!=1; refusing to start in production mode")
 	}
-	return clients.NewFakeLiquidity(clients.FillResult{FillPrice: 50000, TotalFilled: 1}), nil
+	return clients.NewFakeLiquidity(clients.FillResult{FillPrice: decimal.NewFromInt(50000), TotalFilled: decimal.NewFromInt(1)}), nil
 }
 
 func buildFX(cfg config.Config, devMode bool) (clients.FXHedging, error) {
@@ -408,7 +409,7 @@ func buildFX(cfg config.Config, devMode bool) (clients.FXHedging, error) {
 	if !devMode {
 		return nil, errors.New("FX_HEDGING_URL not set and DEV_MODE!=1; refusing to start in production mode")
 	}
-	return clients.NewFakeFX(clients.HedgeResult{HedgedNotional: 0}), nil
+	return clients.NewFakeFX(clients.HedgeResult{HedgedNotional: decimal.Decimal{}}), nil
 }
 
 func buildWallet(cfg config.Config, devMode bool) (clients.WalletManagement, error) {

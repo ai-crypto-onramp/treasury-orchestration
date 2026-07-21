@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/clients"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/metrics"
@@ -47,20 +48,20 @@ const (
 
 // Payload is the outbox payload shape.
 type Payload struct {
-	Aggregate    Aggregate `json:"aggregate"`
-	EventType    EventType `json:"event_type"`
-	BatchID      uuid.UUID `json:"batch_id,omitempty"`
-	NotionalUSD  float64   `json:"notional_usd,omitempty"`
-	Asset        string    `json:"asset,omitempty"`
-	FiatCurrency string    `json:"fiat_currency,omitempty"`
-	Detail       string    `json:"detail,omitempty"`
+	Aggregate    Aggregate       `json:"aggregate"`
+	EventType    EventType       `json:"event_type"`
+	BatchID      uuid.UUID       `json:"batch_id,omitempty"`
+	NotionalUSD  decimal.Decimal `json:"notional_usd,omitempty"`
+	Asset        string          `json:"asset,omitempty"`
+	FiatCurrency string          `json:"fiat_currency,omitempty"`
+	Detail       string          `json:"detail,omitempty"`
 }
 
 // Deps bundles the dispatcher dependencies.
 type Deps struct {
-	Outbox  store.OutboxStore
-	Ledger  clients.LedgerAccounting
-	Audit   clients.AuditLog
+	Outbox store.OutboxStore
+	Ledger clients.LedgerAccounting
+	Audit  clients.AuditLog
 }
 
 // Emitter appends events to the outbox and dispatches them to ledger +

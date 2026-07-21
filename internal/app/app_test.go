@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/config"
 	"github.com/ai-crypto-onramp/treasury-orchestration/internal/eventbus"
 )
@@ -131,12 +133,12 @@ func TestApp_FullFlow(t *testing.T) {
 		t.Fatalf("float code=%d", floatResp.StatusCode)
 	}
 	var pos struct {
-		ShortFiatAmount float64 `json:"short_fiat_amount"`
+		ShortFiatAmount decimal.Decimal `json:"short_fiat_amount"`
 	}
 	_ = json.NewDecoder(floatResp.Body).Decode(&pos)
 	floatResp.Body.Close()
-	if pos.ShortFiatAmount <= 0 {
-		t.Fatalf("float short=%f want >0", pos.ShortFiatAmount)
+	if !pos.ShortFiatAmount.GreaterThan(decimal.Zero) {
+		t.Fatalf("float short=%s want >0", pos.ShortFiatAmount.String())
 	}
 
 	// Metrics endpoint should be served.

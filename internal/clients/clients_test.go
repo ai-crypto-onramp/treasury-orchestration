@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // --- HTTP contract tests ---
@@ -25,16 +27,16 @@ func TestHTTPLiquidity_SubmitAggregate(t *testing.T) {
 		if req.AssetPair != "BTC/USD" {
 			t.Errorf("pair=%s want BTC/USD", req.AssetPair)
 		}
-		_ = json.NewEncoder(w).Encode(FillResult{FillPrice: 50000, TotalFilled: 1, VenueRoutes: []VenueRoute{{Venue: "v", Share: 1, Price: 50000}}})
+		_ = json.NewEncoder(w).Encode(FillResult{FillPrice: decimal.NewFromInt(50000), TotalFilled: decimal.NewFromInt(1), VenueRoutes: []VenueRoute{{Venue: "v", Share: decimal.NewFromInt(1), Price: decimal.NewFromInt(50000)}}})
 	}))
 	defer srv.Close()
 	c := NewHTTPLiquidity(srv.URL)
-	fill, err := c.SubmitAggregate(context.Background(), AggregateOrderRequest{AssetPair: "BTC/USD", Side: "buy", NotionalUSD: 50000}, "k1")
+	fill, err := c.SubmitAggregate(context.Background(), AggregateOrderRequest{AssetPair: "BTC/USD", Side: "buy", NotionalUSD: decimal.NewFromInt(50000)}, "k1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fill.FillPrice != 50000 {
-		t.Fatalf("fill_price=%f want 50000", fill.FillPrice)
+	if !fill.FillPrice.Equal(decimal.NewFromInt(50000)) {
+		t.Fatalf("fill_price=%s want 50000", fill.FillPrice.String())
 	}
 }
 
@@ -43,16 +45,16 @@ func TestHTTPFX_SubmitExposure(t *testing.T) {
 		if r.URL.Path != "/v1/hedges" {
 			t.Errorf("path=%s", r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(HedgeResult{HedgedNotional: 40000, Unhedged: 10000})
+		_ = json.NewEncoder(w).Encode(HedgeResult{HedgedNotional: decimal.NewFromInt(40000), Unhedged: decimal.NewFromInt(10000)})
 	}))
 	defer srv.Close()
 	c := NewHTTPFX(srv.URL)
-	res, err := c.SubmitExposure(context.Background(), HedgeRequest{FiatCurrency: "USD", NotionalUSD: 50000}, "k")
+	res, err := c.SubmitExposure(context.Background(), HedgeRequest{FiatCurrency: "USD", NotionalUSD: decimal.NewFromInt(50000)}, "k")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.HedgedNotional != 40000 {
-		t.Fatalf("hedged=%f want 40000", res.HedgedNotional)
+	if !res.HedgedNotional.Equal(decimal.NewFromInt(40000)) {
+		t.Fatalf("hedged=%s want 40000", res.HedgedNotional.String())
 	}
 }
 
@@ -65,7 +67,7 @@ func TestHTTPWallet_Fund(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewHTTPWallet(srv.URL)
-	res, err := c.Fund(context.Background(), FundingMoveRequest{WalletID: "h", Asset: "BTC", Amount: 1}, "k")
+	res, err := c.Fund(context.Background(), FundingMoveRequest{WalletID: "h", Asset: "BTC", Amount: decimal.NewFromInt(1)}, "k")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +131,7 @@ func TestHTTP_UnavailableError(t *testing.T) {
 // --- Fake tests ---
 
 func TestFakeLiquidity_DuplicateKeyError(t *testing.T) {
-	f := NewFakeLiquidity(FillResult{FillPrice: 1, TotalFilled: 1})
+	f := NewFakeLiquidity(FillResult{FillPrice: decimal.NewFromInt(1), TotalFilled: decimal.NewFromInt(1)})
 	f.SetDuplicateKeyError(true)
 	if _, err := f.SubmitAggregate(context.Background(), AggregateOrderRequest{}, "k"); err != nil {
 		t.Fatal(err)
@@ -223,14 +225,14 @@ func TestDo_RecordsFailureOnExhausted(t *testing.T) {
 }
 
 func TestResilientFX_Retries(t *testing.T) {
-	f := NewFakeFX(HedgeResult{HedgedNotional: 42})
+	f := NewFakeFX(HedgeResult{HedgedNotional: decimal.NewFromInt(42)})
 	f.SetError(ErrUnavailable)
 	r := NewResilientFX(f, RetryOptions{MaxAttempts: 2, Backoff: time.Millisecond}, nil)
 	out, err := r.SubmitExposure(context.Background(), HedgeRequest{FiatCurrency: "USD"}, "k")
 	if err != nil {
 		t.Fatalf("expected success after retry, got %v", err)
 	}
-	if out == nil || out.HedgedNotional != 42 {
+	if out == nil || !out.HedgedNotional.Equal(decimal.NewFromInt(42)) {
 		t.Fatalf("unexpected out=%+v", out)
 	}
 	if len(f.Calls()) != 2 {
@@ -251,7 +253,7 @@ func TestFakeFX_DuplicateKeyError(t *testing.T) {
 
 func TestFakeWallet_FundAndError(t *testing.T) {
 	f := NewFakeWallet(FundingMoveResult{Completed: true, TxID: "tx"})
-	res, err := f.Fund(context.Background(), FundingMoveRequest{WalletID: "w", Asset: "BTC", Amount: 1}, "k")
+	res, err := f.Fund(context.Background(), FundingMoveRequest{WalletID: "w", Asset: "BTC", Amount: decimal.NewFromInt(1)}, "k")
 	if err != nil || !res.Completed {
 		t.Fatalf("fund: err=%v res=%+v", err, res)
 	}
@@ -304,14 +306,14 @@ func TestFakeLedger_SetErrorClearsAfterOne(t *testing.T) {
 }
 
 func TestFakeLiquidity_SetFill(t *testing.T) {
-	f := NewFakeLiquidity(FillResult{FillPrice: 1})
-	f.SetFill(FillResult{FillPrice: 999})
+	f := NewFakeLiquidity(FillResult{FillPrice: decimal.NewFromInt(1)})
+	f.SetFill(FillResult{FillPrice: decimal.NewFromInt(999)})
 	out, err := f.SubmitAggregate(context.Background(), AggregateOrderRequest{}, "k")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.FillPrice != 999 {
-		t.Fatalf("fill=%f want 999", out.FillPrice)
+	if !out.FillPrice.Equal(decimal.NewFromInt(999)) {
+		t.Fatalf("fill=%s want 999", out.FillPrice.String())
 	}
 }
 
@@ -366,13 +368,15 @@ func TestHTTP_NilOutSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewHTTPLedger(srv.URL)
-	if err := c.Post(context.Background(), LedgerPost{NotionalUSD: 100, FiatCurrency: "USD"}, "k"); err != nil {
+	if err := c.Post(context.Background(), LedgerPost{NotionalUSD: decimal.NewFromInt(100), FiatCurrency: "USD"}, "k"); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestHTTP_LedgerPostAmountDefaults(t *testing.T) {
-	// NotionalUSD == 0 should clamp amount to 1; empty fiat defaults to USD.
+	// NotionalUSD == 0 is forwarded as "0" at full precision; empty fiat
+	// defaults to USD. (The previous int64 truncation/clamp-to-1 has been
+	// removed.)
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
@@ -388,8 +392,8 @@ func TestHTTP_LedgerPostAmountDefaults(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %v", got)
 	}
 	first := entries[0].(map[string]any)
-	if first["amount"].(float64) != 1 {
-		t.Fatalf("amount=%v want 1", first["amount"])
+	if first["amount"].(string) != "0" {
+		t.Fatalf("amount=%v want 0", first["amount"])
 	}
 	if first["asset"].(string) != "USD" {
 		t.Fatalf("asset=%v want USD", first["asset"])
